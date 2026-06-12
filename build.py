@@ -184,8 +184,18 @@ h1 span{color:var(--accent2)}
    background:var(--panel);color:var(--text);font-size:14px;outline:none}
 #q:focus{border-color:var(--accent)}
 .count{color:var(--muted);font-size:12px}
-.wrap{display:grid;grid-template-columns:320px 1fr;gap:0;min-height:calc(100vh - 84px)}
+.wrap{display:grid;grid-template-columns:268px 402px minmax(0,1fr);gap:0;min-height:calc(100vh - 84px)}
 .list{border-right:1px solid var(--line);overflow:auto;max-height:calc(100vh - 84px)}
+.charcol{border-right:1px solid var(--line);overflow:auto;max-height:calc(100vh - 84px);padding:14px 14px 24px}
+.charhdr{font-size:15px;font-weight:600;margin-bottom:12px}
+.charhdr2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
+.charstats{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+.charbtn-narrow{display:none}
+@media(max-width:1180px){
+  .wrap{grid-template-columns:268px minmax(0,1fr)}
+  .charcol{display:none}
+  .charbtn-narrow{display:inline-block}
+}
 .cathd{display:flex;align-items:center;gap:8px;padding:9px 14px;cursor:pointer;
    background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;font-weight:500}
 .cathd:hover{background:var(--panel2)}
@@ -291,10 +301,11 @@ tr.doneRow .mname{text-decoration:line-through}
 .statv{font-variant-numeric:tabular-nums;font-weight:500}
 .charwrap{display:flex;gap:32px;flex-wrap:wrap;align-items:flex-start;margin-top:6px}
 .charleft{flex:0 0 auto}
-.charbody{display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
-.skinwrap{flex:none}
+.skinwrap{display:flex;flex-direction:column;align-items:center;margin-bottom:14px}
 #skinview{width:200px;height:300px;border:1px solid var(--line);border-radius:10px;background:#0d1014;cursor:grab}
-.slotcol{flex:none}
+.charcol .userrow{margin-bottom:14px}
+.charcol .slotgrid{margin-bottom:8px}
+.isummary{max-width:560px}
 .charright{flex:1;min-width:260px;max-width:460px}
 .charright h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
 .userrow{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
@@ -335,12 +346,13 @@ tr.doneRow .mname{text-decoration:line-through}
   <div class="search">
     <input id="q" placeholder="Search items, or browse categories on the left..." autocomplete="off">
     <span class="count" id="count"></span>
-    <button class="listbtn" id="charbtn">Character</button>
+    <button class="listbtn charbtn-narrow" id="charbtn">Character</button>
     <button class="listbtn" id="listbtn">Craft list <span id="listn">0</span></button>
   </div>
 </header>
 <div class="wrap">
   <div class="list" id="list"></div>
+  <div class="charcol" id="charcol"></div>
   <div class="detail" id="detail"><div class="empty">Pick a category on the left, or search, then click an item.</div></div>
 </div>
 <script>
@@ -573,7 +585,30 @@ function rollup(id,mult,stack,acc){
 }
 function fmt(n){return Number.isInteger(n)?n:(Math.round(n*100)/100);}
 
-function showItem(id){
+// compact summary card (default on click) — no crafting tree; button opens it
+function showItemSummary(id){
+  sel=id; viewingList=false; renderList();
+  const it=ITEMS[id], rec=RECIPES[id];
+  let h=`<div class="isummary"><div class="hd">${imgFor(id,'bigico')}<div>
+      <h2>${it.name}</h2>
+      <div class="meta">${rarPill(it.rarity)}${it.level?`<span class="lvtag">Lvl ${it.level}</span>`:''}
+        ${it.type?`<span class="lvtag">${it.type.toLowerCase().replace(/_/g,' ')}</span>`:''}</div>
+    </div></div>`;
+  h+=statsBlock(it);
+  if(!it.stats&&!it.damages) h+=`<div class="sub">${rec?`Crafted by <b>${rec.job.toLowerCase()}</b>`:'Base material'}</div>`;
+  if(it.sources&&it.sources.length) h+=`<div class="sub">Gather: ${srcLabel(it)}</div>`;
+  h+=`<div class="addrow">
+      ${canEquip(it)?`<button class="addlist" id="equipbtn">Equip</button>`:''}
+      <button class="addlist" id="addlist" style="background:var(--panel2);color:var(--text);border:1px solid var(--line)">+ Craft list</button>
+      ${rec?`<button class="addlist" id="recipebtn" style="background:var(--panel2);color:var(--text);border:1px solid var(--line)">View crafting recipe →</button>`:''}
+    </div></div>`;
+  detail.innerHTML=h;
+  const eb=document.getElementById('equipbtn'); if(eb)eb.onclick=()=>{if(equipItem(id)){eb.textContent='✓ Equipped'; refreshChar();}};
+  document.getElementById('addlist').onclick=()=>{addToBuild(id,1);
+    const b=document.getElementById('addlist'); b.textContent=`✓ on list (${BUILD[id]})`;};
+  const rb=document.getElementById('recipebtn'); if(rb)rb.onclick=()=>showItemFull(id);
+}
+function showItemFull(id){
   sel=id; viewingList=false; renderList();
   const it=ITEMS[id], rec=RECIPES[id];
   let h=`<div class="hd">${imgFor(id,'bigico')}<div>
@@ -612,7 +647,7 @@ function showItem(id){
   document.getElementById('addlist').onclick=()=>{addToBuild(id,aq);
     const b=document.getElementById('addlist'); b.textContent=`✓ Added — ${BUILD[id]}× on list`;};
   const eb=document.getElementById('equipbtn');
-  if(eb) eb.onclick=()=>{if(equipItem(id)) eb.textContent='✓ Equipped';};
+  if(eb) eb.onclick=()=>{if(equipItem(id)){eb.textContent='✓ Equipped'; refreshChar();}};
   if(rec){
     document.getElementById('tree').appendChild(buildNode(id,1,new Set()));
     const acc=rollup(id,1,new Set(),{});
@@ -646,13 +681,13 @@ function renderTagZone(id){
     </div>`;
   z.innerHTML=h;
   z.querySelector('#addtag').onclick=()=>z.querySelector('#tageditor').classList.toggle('on');
-  z.querySelectorAll('[data-untag]').forEach(e=>e.onclick=()=>{unassignTag(id,e.dataset.untag); showItem(id);});
-  z.querySelectorAll('[data-applytag]').forEach(e=>e.onclick=()=>{assignTag(id,e.dataset.applytag); showItem(id);});
+  z.querySelectorAll('[data-untag]').forEach(e=>e.onclick=()=>{unassignTag(id,e.dataset.untag); showItemFull(id);});
+  z.querySelectorAll('[data-applytag]').forEach(e=>e.onclick=()=>{assignTag(id,e.dataset.applytag); showItemFull(id);});
   z.querySelectorAll('.sw').forEach(s=>s.onclick=()=>{pendColor=s.dataset.col;
     z.querySelectorAll('.sw').forEach(x=>x.classList.toggle('on',x.dataset.col===pendColor));});
   z.querySelector('#tagsave').onclick=()=>{
     const nm=z.querySelector('#tagname').value.trim(); if(!nm)return;
-    TAGS[nm]=pendColor; assignTag(id,nm); showItem(id);};
+    TAGS[nm]=pendColor; assignTag(id,nm); showItemFull(id);};
 }
 
 // ---- craft list view (targets + aggregated totals + have/left) ------------
@@ -734,42 +769,43 @@ function showList(){
 function equipItem(id){const it=ITEMS[id]; if(!canEquip(it))return false;
   const slots=slotForType(it.type); const t=slots.find(s=>!EQUIP[s.k])||slots[0];
   EQUIP[t.k]=id; saveEquip(); return true;}
-function showChar(){
-  sel=null; viewingList=false; hideTip(); renderList();
-  let h=`<div class="hd"><h2>Character</h2></div>
-    <div class="charwrap"><div class="charleft">
-      <div class="userrow">
-        <input id="charuser" type="text" placeholder="Minecraft username (optional)" value="${BASENAME||''}">
-        <button id="loaduser">Load my stats</button>
-        ${BASESTATS?`<span class="src">base+scrolls loaded${BASENAME?': '+BASENAME:''}</span>`:''}
-      </div>
-      <div class="charbody">
-        ${BASENAME?`<div class="skinwrap"><canvas id="skinview"></canvas><div class="legend" style="text-align:center;margin-top:4px">drag to rotate</div></div>`:''}
-        <div class="slotcol">
-          <div class="slotgrid" id="slotgrid">${SLOTS.map(s=>slotHTML(s)).join('')}</div>
-          <div class="handrow">${slotHTML(HAND)}</div>
-          <div class="legend">drag an item from the left onto a matching slot · ✕ to remove</div>
-        </div>
-      </div>
-    </div><div class="charright"><h3>Total stats</h3><div id="stattotals"></div></div></div>`;
-  detail.innerHTML=h;
+// the character panel lives persistently in #charcol (or in #detail as a
+// narrow-screen fallback). renderCharPanel fills whichever box it's given.
+let charHost=null;
+function renderCharPanel(box){
+  charHost=box; hideTip();
+  let h=`<div class="charhdr">Character</div>
+    <div class="userrow">
+      <input id="charuser" type="text" placeholder="Minecraft username" value="${BASENAME||''}">
+      <button id="loaduser">Load stats</button>
+    </div>
+    ${BASESTATS?`<div class="src" style="margin:-8px 0 10px">base+scrolls loaded${BASENAME?': '+BASENAME:''}</div>`:''}
+    ${BASENAME?`<div class="skinwrap"><canvas id="skinview"></canvas><div class="legend" style="text-align:center;margin-top:4px">drag to rotate</div></div>`:''}
+    <div class="slotgrid" id="slotgrid">${SLOTS.map(s=>slotHTML(s)).join('')}</div>
+    <div class="handrow">${slotHTML(HAND)}</div>
+    <div class="legend">drag an item onto a slot · ✕ to remove</div>
+    <div class="charstats"><div class="charhdr2">Total stats</div><div id="stattotals"></div></div>`;
+  box.innerHTML=h;
   renderStatTotals();
-  detail.querySelectorAll('.slot').forEach(el=>{
+  box.querySelectorAll('.slot').forEach(el=>{
     el.ondragover=e=>{e.preventDefault(); el.classList.add('drop');};
     el.ondragleave=()=>el.classList.remove('drop');
     el.ondrop=e=>{e.preventDefault(); el.classList.remove('drop');
       const id=e.dataTransfer.getData('text/plain'); const it=ITEMS[id]; if(!it)return;
-      if(el.dataset.types.split(',').includes(it.type)){EQUIP[el.dataset.slot]=id; saveEquip(); showChar();}
-      else if(equipItem(id)){showChar();}                 // wrong slot -> snap to the right one
+      if(el.dataset.types.split(',').includes(it.type)){EQUIP[el.dataset.slot]=id; saveEquip(); renderCharPanel(box);}
+      else if(equipItem(id)){renderCharPanel(box);}        // wrong slot -> snap to the right one
       else{el.classList.add('bad'); setTimeout(()=>el.classList.remove('bad'),350);}};});
-  detail.querySelectorAll('[data-unequip]').forEach(x=>x.onclick=e=>{e.stopPropagation();
-    delete EQUIP[x.dataset.unequip]; saveEquip(); showChar();});
-  detail.querySelectorAll('.slot.filled').forEach(el=>{
+  box.querySelectorAll('[data-unequip]').forEach(x=>x.onclick=e=>{e.stopPropagation();
+    delete EQUIP[x.dataset.unequip]; saveEquip(); renderCharPanel(box);});
+  box.querySelectorAll('.slot.filled').forEach(el=>{
     el.onmouseenter=()=>showSlotTip(el.dataset.itemid);
     el.onmousemove=moveTip; el.onmouseleave=hideTip;});
-  document.getElementById('loaduser').onclick=loadUserStats;
+  box.querySelector('#loaduser').onclick=loadUserStats;
   if(BASENAME) renderSkin(BASENAME);
 }
+function charVisible(){const c=document.getElementById('charcol'); return c&&getComputedStyle(c).display!=='none';}
+function refreshChar(){if(charHost&&charHost.isConnected&&(charHost.id!=='charcol'||charVisible())) renderCharPanel(charHost);}
+function showChar(){sel=null; viewingList=false; renderList(); renderCharPanel(detail);}  // narrow fallback
 // 3D walking character render (skinview3d, lazy-loaded)
 let SV_LOADING, skinViewer;
 function ensureSkinview(){
@@ -843,20 +879,19 @@ function loadUserStats(){
         for(const [k,v] of Object.entries(st)) relics[k]=(relics[k]||0)+v;}
       BASESTATS={base:a.base||{},scrolls:a.scrolls||{},relics}; BASENAME=d.username||u;
       localStorage.setItem('mb_basestats',JSON.stringify(BASESTATS));
-      localStorage.setItem('mb_basename',BASENAME); showChar();})
+      localStorage.setItem('mb_basename',BASENAME); renderCharPanel(charHost||detail);})
     .catch(err=>{btn.textContent='Not found ('+err+')';});
 }
 
 list.addEventListener('dragstart',e=>{const r=e.target.closest('.row');
   if(r&&r.dataset.id) e.dataTransfer.setData('text/plain',r.dataset.id);});
 list.addEventListener('dblclick',e=>{const r=e.target.closest('.row');
-  if(r&&r.dataset.id&&equipItem(r.dataset.id)){
-    if(document.getElementById('slotgrid')) showChar();          // refresh if char view open
-    else{const eb=document.getElementById('equipbtn'); if(eb&&sel===r.dataset.id) eb.textContent='✓ Equipped';}}});
+  if(r&&r.dataset.id&&equipItem(r.dataset.id)){refreshChar();
+    const eb=document.getElementById('equipbtn'); if(eb&&sel===r.dataset.id) eb.textContent='✓ Equipped';}});
 list.onclick=e=>{
   const r=e.target.closest('.row');
   if(r){ if(r.dataset.tagfilter){tagFilter=tagFilter===r.dataset.tagfilter?null:r.dataset.tagfilter; renderList(); return;}
-         if(r.dataset.id){showItem(r.dataset.id); return;} }
+         if(r.dataset.id){showItemSummary(r.dataset.id); return;} }   // click = quick summary, not full crafting
   const c=e.target.closest('.cathd');
   if(c){const k=c.dataset.cat; openCats.has(k)?openCats.delete(k):openCats.add(k); renderList();}
 };
@@ -865,6 +900,9 @@ document.getElementById('listbtn').onclick=showList;
 q.oninput=()=>{tagFilter=null; renderList();};
 updateListN();
 renderList();
+if(charVisible()) renderCharPanel(document.getElementById('charcol'));
+addEventListener('resize',()=>{const c=document.getElementById('charcol');
+  if(charVisible()&&c&&!c.querySelector('#slotgrid')) renderCharPanel(c);});
 </script>
 </body></html>"""
 
