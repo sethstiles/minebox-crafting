@@ -61,6 +61,20 @@ for f in glob.glob(os.path.join(SRC, "items_p*.json")):
     for it in json.load(open(f)).get("items", []):
         items_full[it["id"]] = it
 
+# ---- stat metadata (/attributes) + vanilla icon fallbacks ------------------
+attrs = {}   # lower-id -> {name, color}
+ap = os.path.join(SRC, "attributes.json")
+if os.path.exists(ap):
+    araw = json.load(open(ap, encoding="utf-8", errors="replace"))
+    alist = araw if isinstance(araw, list) else list(araw.values())[0]
+    for a in alist:
+        attrs[a["id"].lower()] = {"name": a.get("name"), "color": a.get("color")}
+
+vanilla_icons = {}
+vp = os.path.join(SRC, "vanilla_icons.json")
+if os.path.exists(vp):
+    vanilla_icons = json.load(open(vp))
+
 # ---- type -> friendly category ---------------------------------------------
 CATS = [
     ("Weapons",       {"LONG_SWORD","SWORD","DAGGER","BOW","GUN","STAFF","HAMMER"}),
@@ -113,12 +127,16 @@ for idstr in all_ids:
         "craftable": craftable,
         "sources": drop_index.get(idstr) or drop_index.get(strip_prefix(idstr)) or [],
     }
-    img = m.get("image")
+    img = m.get("image") or vanilla_icons.get(idstr)
     if img:
         entry["img"] = img   # raw base64 png, data: prefix added in JS
+    if m.get("stats"):
+        entry["stats"] = m["stats"]       # {STAT: [min,max]}
+    if m.get("damages"):
+        entry["damages"] = m["damages"]   # {ELEMENT: [min,max]}
     items[idstr] = entry
 
-data = {"items": items, "recipes": recipes, "catOrder": CAT_ORDER}
+data = {"items": items, "recipes": recipes, "catOrder": CAT_ORDER, "attrs": attrs}
 blob = json.dumps(data, separators=(",", ":"))
 
 ncat = {}
@@ -248,6 +266,12 @@ tr.doneRow .mname{text-decoration:line-through}
 #clearlist:hover{border-color:#E24B4A;color:#E24B4A}
 .progress{height:6px;border-radius:3px;background:var(--line);overflow:hidden;max-width:680px;margin:2px 0 14px}
 .progress>span{display:block;height:100%;background:var(--accent)}
+.statgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:4px 18px;max-width:680px}
+.stat{display:flex;align-items:center;justify-content:space-between;padding:4px 0;
+   border-bottom:1px solid var(--line);font-size:13px}
+.statn{display:flex;align-items:center;gap:7px;color:var(--text)}
+.statdot{width:8px;height:8px;border-radius:2px;flex:none}
+.statv{font-variant-numeric:tabular-nums;font-weight:500}
 </style></head>
 <body>
 <header>
@@ -264,7 +288,7 @@ tr.doneRow .mname{text-decoration:line-through}
 </div>
 <script>
 const DATA = __DATA__;
-const ITEMS = DATA.items, RECIPES = DATA.recipes, CAT_ORDER = DATA.catOrder;
+const ITEMS = DATA.items, RECIPES = DATA.recipes, CAT_ORDER = DATA.catOrder, ATTR = DATA.attrs||{};
 const RAR_COLORS = {COMMON:'#93a1ad',UNCOMMON:'#63a022',RARE:'#378ADD',EPIC:'#7F77DD',LEGENDARY:'#EF9F27',MYTHIC:'#D4537E'};
 const TAG_PALETTE = ['#E24B4A','#EF9F27','#63a022','#1D9E75','#378ADD','#7F77DD','#D4537E','#93a1ad'];
 const list=document.getElementById('list'), detail=document.getElementById('detail'),
@@ -311,6 +335,19 @@ function rarPill(r){if(!r)return ''; const c=RAR_COLORS[r]||'#93a1ad';
   return `<span class="rar" style="color:${c};border:1px solid ${c}">${r[0]+r.slice(1).toLowerCase()}</span>`;}
 function rdot(r){if(!r)return '<span class="rdot"></span>'; const c=RAR_COLORS[r]||'#93a1ad';
   return `<span class="rdot" style="background:${c}"></span>`;}
+function pretty(k){return k.toLowerCase().replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
+function statName(k){const a=ATTR[k.toLowerCase()]; return a&&a.name?a.name:pretty(k);}
+function statColor(k){const a=ATTR[k.toLowerCase()]; return a&&a.color?a.color:'#93a1ad';}
+function statRow(k,rng,suffix){const c=statColor(k);
+  const v=rng[0]===rng[1]?rng[0]:`${rng[0]}–${rng[1]}`;
+  return `<div class="stat"><span class="statn"><span class="statdot" style="background:${c}"></span>${statName(k)}${suffix||''}</span><span class="statv" style="color:${c}">+${v}</span></div>`;}
+function statsBlock(it){
+  const s=it.stats, d=it.damages; if(!s&&!d) return '';
+  let rows='';
+  if(d) for(const [k,r] of Object.entries(d)) rows+=statRow(k,r,' dmg');
+  if(s) for(const [k,r] of Object.entries(s)) rows+=statRow(k,r,'');
+  return `<div class="section"><h3>Stats</h3><div class="statgrid">${rows}</div>
+    <div class="legend">ranges = the possible roll on this item</div></div>`;}
 
 const arr=Object.values(ITEMS);
 
@@ -422,6 +459,7 @@ function showItem(id){
       <span class="qstep">qty <button id="aqm">−</button><b id="addq">1</b><button id="aqp">+</button></span>
       ${BUILD[id]?`<span class="src">already on list: ${BUILD[id]}×</span>`:''}
     </div>`;
+  h+=statsBlock(it);
   if(rec){
     h+=`<div class="section"><h3>Component tree</h3><div class="tree" id="tree"></div>
         <div class="legend">▾ click to expand · qty = amount to make 1 of this item</div></div>`;
