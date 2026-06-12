@@ -291,6 +291,10 @@ tr.doneRow .mname{text-decoration:line-through}
 .statv{font-variant-numeric:tabular-nums;font-weight:500}
 .charwrap{display:flex;gap:32px;flex-wrap:wrap;align-items:flex-start;margin-top:6px}
 .charleft{flex:0 0 auto}
+.charbody{display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+.skinwrap{flex:none}
+#skinview{width:200px;height:300px;border:1px solid var(--line);border-radius:10px;background:#0d1014;cursor:grab}
+.slotcol{flex:none}
 .charright{flex:1;min-width:260px;max-width:460px}
 .charright h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
 .userrow{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
@@ -312,6 +316,11 @@ tr.doneRow .mname{text-decoration:line-through}
 .slot.filled .slotlabel{color:var(--text)}
 .slotx{position:absolute;top:5px;right:7px;color:#E24B4A;font-size:12px;cursor:pointer;opacity:.55}
 .slotx:hover{opacity:1}
+.handrow{width:374px;margin-top:10px}
+.handrow .slot{height:66px;flex-direction:row;justify-content:flex-start;gap:14px;padding:0 16px}
+.handrow .slotico{width:42px;height:42px}
+.handrow .slotph{width:36px;height:36px}
+.handrow .slotlabel{max-width:none;font-size:13px;text-align:left}
 .tip{position:fixed;z-index:50;display:none;background:#0d1014;border:1px solid var(--line);
    border-radius:8px;padding:9px 11px;font-size:12px;max-width:240px;pointer-events:none}
 .tip b{font-size:13px;margin-right:6px}.tiprows{margin-top:6px;display:flex;flex-direction:column;gap:2px}
@@ -396,9 +405,18 @@ const SLOTS=[
   {k:'boots',   label:'Boots',   types:['BOOTS']},
   {k:'pet',     label:'Pet',     types:['PET']},
 ];
-const SLOTBYKEY=Object.fromEntries(SLOTS.map(s=>[s.k,s]));
-function slotForType(t){return SLOTS.filter(s=>s.types.includes(t));}
+// hand = held weapon or tool (rendered separately, below the armor grid)
+const HAND={k:'hand',label:'Hand (weapon / tool)',types:['LONG_SWORD','SWORD','DAGGER','BOW','GUN','STAFF','HAMMER',
+  'HARVESTER','FISHING_ROD','WATERING_CAN','BUCKET','VANILLA_TOOL','COMPACTOR','BLOCK_STICK','SPONGE','BLOWER','GHOST_VACUUM']};
+const ALLSLOTS=SLOTS.concat([HAND]);
+const SLOTBYKEY=Object.fromEntries(ALLSLOTS.map(s=>[s.k,s]));
+function slotForType(t){return ALLSLOTS.filter(s=>s.types.includes(t));}
 function canEquip(it){return it&&it.type&&slotForType(it.type).length>0;}
+function slotHTML(s,eq,readonly){eq=eq||EQUIP; const id=eq[s.k], it=id?ITEMS[id]:null;
+  return `<div class="slot${it?' filled':''}" data-slot="${s.k}" data-types="${s.types.join(',')}"${it?` data-itemid="${id}"`:''}>
+    ${it?imgFor(id,'slotico'):'<span class="slotph"></span>'}
+    <span class="slotlabel">${it?it.name:s.label}</span>
+    ${(it&&!readonly)?`<span class="slotx" data-unequip="${s.k}">✕</span>`:''}</div>`;}
 // aggregate base + scrolls + relics + equipped gear into per-stat totals,
 // keeping a per-source breakdown for the hover tooltip
 function equipStats(){
@@ -411,10 +429,26 @@ function equipStats(){
     for(const src of ['base','scrolls','relics'])
       for(const [k,v] of Object.entries(BASESTATS[src]||{})) if(v) add(lbl[src],k,v,v,false);
   }
-  for(const id of Object.values(EQUIP)){const it=ITEMS[id]; if(!it||!it.stats)continue;
-    for(const [k,r] of Object.entries(it.stats)) add(it.name,k,r[0],r[1],true);}
+  for(const id of Object.values(EQUIP)){const it=ITEMS[id]; if(!it)continue;
+    if(it.stats) for(const [k,r] of Object.entries(it.stats)) add(it.name,k,r[0],r[1],true);
+    if(it.damages) for(const [k,r] of Object.entries(it.damages)) add(it.name,'dmg:'+k,r[0],r[1],true);}
   return tot;
 }
+// gear-only stat aggregation for an arbitrary item-id list (craft-list set)
+function statsFromItems(ids){
+  const tot={};
+  function ent(k){k=k.toLowerCase(); return tot[k]||(tot[k]={min:0,max:0,gearMin:0,gearMax:0,sources:[]});}
+  function add(name,stat,mn,mx){const e=ent(stat); e.min+=mn; e.max+=mx; e.gearMin+=mn; e.gearMax+=mx; e.sources.push({name,min:mn,max:mx});}
+  for(const id of ids){const it=ITEMS[id]; if(!it)continue;
+    if(it.stats) for(const [k,r] of Object.entries(it.stats)) add(it.name,k,r[0],r[1]);
+    if(it.damages) for(const [k,r] of Object.entries(it.damages)) add(it.name,'dmg:'+k,r[0],r[1]);}
+  return tot;
+}
+// auto-place the equippable items in the craft list into a slot map (preview loadout)
+function buildLoadout(){const map={};
+  for(const id of Object.keys(BUILD)){const it=ITEMS[id]; if(!canEquip(it))continue;
+    const slots=slotForType(it.type); const t=slots.find(s=>!map[s.k])||slots[0]; if(t)map[t.k]=id;}
+  return map;}
 
 function imgFor(id,cls){const it=ITEMS[id];
   if(it&&it.img) return `<img class="${cls}" src="data:image/png;base64,${it.img}" alt="">`;
@@ -424,8 +458,10 @@ function rarPill(r){if(!r)return ''; const c=RAR_COLORS[r]||'#93a1ad';
 function rdot(r){if(!r)return '<span class="rdot"></span>'; const c=RAR_COLORS[r]||'#93a1ad';
   return `<span class="rdot" style="background:${c}"></span>`;}
 function pretty(k){return k.toLowerCase().replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
-function statName(k){const a=ATTR[k.toLowerCase()]; return a&&a.name?a.name:pretty(k);}
-function statColor(k){const a=ATTR[k.toLowerCase()]; return a&&a.color?a.color:'#93a1ad';}
+function statName(k){if(k.startsWith('dmg:'))return pretty(k.slice(4))+' dmg';
+  const a=ATTR[k.toLowerCase()]; return a&&a.name?a.name:pretty(k);}
+function statColor(k){if(k.startsWith('dmg:'))return '#E24B4A';
+  const a=ATTR[k.toLowerCase()]; return a&&a.color?a.color:'#93a1ad';}
 function statRow(k,rng,suffix){const c=statColor(k);
   const v=rng[0]===rng[1]?rng[0]:`${rng[0]}–${rng[1]}`;
   return `<div class="stat"><span class="statn"><span class="statdot" style="background:${c}"></span>${statName(k)}${suffix||''}</span><span class="statv" style="color:${c}">+${v}</span></div>`;}
@@ -635,6 +671,16 @@ function showList(){
         <b>${BUILD[id]}</b><button data-bq="${id}" data-d="1">+</button></span></td>
       <td class="n"><span class="rm" data-rm="${id}">remove</span></td></tr>`;}
   h+=`</table></div>`;
+  // gear-set preview: equippable items in the list, shown in their slots + combined stats
+  const loadout=buildLoadout(); const setIds=Object.values(loadout);
+  if(setIds.length){
+    h+=`<div class="section"><h3>Gear set preview</h3>
+      <div class="charwrap"><div class="charleft">
+        <div class="slotgrid">${SLOTS.map(s=>slotHTML(s,loadout,true)).join('')}</div>
+        <div class="handrow">${slotHTML(HAND,loadout,true)}</div>
+        <div class="legend">equippable items in your craft list, in their slots · hover for stats</div>
+      </div><div class="charright"><h3>Combined gear stats</h3><div id="setstats"></div></div></div></div>`;
+  }
   // totals
   const acc = listMode==='raw' ? rawAgg() : bomAgg();
   const rows=Object.entries(acc).map(([rid,amt])=>[rid,Math.ceil(Math.round(amt*100)/100)])
@@ -675,6 +721,13 @@ function showList(){
     const v=Math.max(0,parseInt(inp.value)||0); HAVE[inp.dataset.have]=v; saveHave(); showList();});
   document.getElementById('clearlist').onclick=()=>{
     if(confirm('Clear the whole craft list?')){BUILD={}; saveBuild(); showList();}};
+  if(setIds.length){
+    const setTot=statsFromItems(setIds); const box=document.getElementById('setstats');
+    box.innerHTML=Object.keys(setTot).length?renderStatRows(setTot):'<div class="src">these items have no stats</div>';
+    wireStatHover(box,setTot);
+    detail.querySelectorAll('.slot.filled').forEach(el=>{el.onmouseenter=()=>showSlotTip(el.dataset.itemid);
+      el.onmousemove=moveTip; el.onmouseleave=hideTip;});
+  }
 }
 
 // ---- character view -------------------------------------------------------
@@ -690,13 +743,14 @@ function showChar(){
         <button id="loaduser">Load my stats</button>
         ${BASESTATS?`<span class="src">base+scrolls loaded${BASENAME?': '+BASENAME:''}</span>`:''}
       </div>
-      <div class="slotgrid" id="slotgrid">`;
-  for(const s of SLOTS){const id=EQUIP[s.k], it=id?ITEMS[id]:null;
-    h+=`<div class="slot${it?' filled':''}" data-slot="${s.k}" data-types="${s.types.join(',')}">
-      ${it?imgFor(id,'slotico'):'<span class="slotph"></span>'}
-      <span class="slotlabel">${it?it.name:s.label}</span>
-      ${it?`<span class="slotx" data-unequip="${s.k}">✕</span>`:''}</div>`;}
-  h+=`</div><div class="legend">drag an item from the left onto a matching slot · ✕ to remove</div>
+      <div class="charbody">
+        ${BASENAME?`<div class="skinwrap"><canvas id="skinview"></canvas><div class="legend" style="text-align:center;margin-top:4px">drag to rotate</div></div>`:''}
+        <div class="slotcol">
+          <div class="slotgrid" id="slotgrid">${SLOTS.map(s=>slotHTML(s)).join('')}</div>
+          <div class="handrow">${slotHTML(HAND)}</div>
+          <div class="legend">drag an item from the left onto a matching slot · ✕ to remove</div>
+        </div>
+      </div>
     </div><div class="charright"><h3>Total stats</h3><div id="stattotals"></div></div></div>`;
   detail.innerHTML=h;
   renderStatTotals();
@@ -711,35 +765,61 @@ function showChar(){
   detail.querySelectorAll('[data-unequip]').forEach(x=>x.onclick=e=>{e.stopPropagation();
     delete EQUIP[x.dataset.unequip]; saveEquip(); showChar();});
   detail.querySelectorAll('.slot.filled').forEach(el=>{
-    el.onmouseenter=()=>showSlotTip(EQUIP[el.dataset.slot]);
+    el.onmouseenter=()=>showSlotTip(el.dataset.itemid);
     el.onmousemove=moveTip; el.onmouseleave=hideTip;});
   document.getElementById('loaduser').onclick=loadUserStats;
+  if(BASENAME) renderSkin(BASENAME);
 }
-let STAT_BREAKDOWN={};
-function renderStatTotals(){
-  const tot=equipStats(); STAT_BREAKDOWN=tot; const order=Object.keys(ATTR);
+// 3D walking character render (skinview3d, lazy-loaded)
+let SV_LOADING, skinViewer;
+function ensureSkinview(){
+  if(window.skinview3d) return Promise.resolve();
+  if(SV_LOADING) return SV_LOADING;
+  SV_LOADING=new Promise((res,rej)=>{const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/skinview3d@2.2.1/bundles/skinview3d.bundle.js';
+    s.onload=res; s.onerror=rej; document.head.appendChild(s);});
+  return SV_LOADING;
+}
+function renderSkin(name){
+  const canvas=document.getElementById('skinview'); if(!canvas)return;
+  ensureSkinview().then(()=>{
+    if(!document.getElementById('skinview'))return;   // view changed while loading
+    try{
+      if(skinViewer&&skinViewer.dispose) skinViewer.dispose();
+      skinViewer=new skinview3d.SkinViewer({canvas,width:200,height:300,
+        skin:'https://mc-heads.net/skin/'+encodeURIComponent(name)});
+      skinViewer.animation=new skinview3d.WalkingAnimation();
+      skinViewer.animation.speed=0.55; skinViewer.zoom=0.9;
+    }catch(e){console.warn('skin render failed',e);}
+  }).catch(()=>{});
+}
+function renderStatRows(tot){
+  const order=Object.keys(ATTR);
   const keys=Object.keys(tot).sort((a,b)=>(order.indexOf(a)<0?99:order.indexOf(a))-(order.indexOf(b)<0?99:order.indexOf(b)));
-  const box=document.getElementById('stattotals');
-  if(!keys.length){box.innerHTML=`<div class="src">Equip gear (and optionally load your username) to see totals.</div>`; return;}
-  let h='<div class="statgrid" style="grid-template-columns:1fr">';
-  for(const k of keys){const t=tot[k], c=statColor(k);
-    const v=t.min===t.max?`${t.min}`:`${t.min}–${t.max}`;
+  return '<div class="statgrid" style="grid-template-columns:1fr">'+keys.map(k=>{
+    const t=tot[k], c=statColor(k); const v=t.min===t.max?`${t.min}`:`${t.min}–${t.max}`;
     const g=(t.gearMin||t.gearMax)?` <span class="src">(gear +${t.gearMin===t.gearMax?t.gearMin:t.gearMin+'–'+t.gearMax})</span>`:'';
-    h+=`<div class="stat statrow" data-stat="${k}"><span class="statn"><span class="statdot" style="background:${c}"></span>${statName(k)}</span>
-      <span class="statv" style="color:${c}">${v}${g}</span></div>`;}
-  box.innerHTML=h+'</div>'+
-    `<div class="legend" style="margin-top:10px">hover a stat for its sources · totals = base + scrolls + relics + equipped gear
-      (the API can't expose your default base HP, museum, pets, or what gear you're actually wearing)</div>`;
-  box.querySelectorAll('.statrow').forEach(row=>{
-    row.onmouseenter=()=>showStatTip(row.dataset.stat); row.onmousemove=moveTip; row.onmouseleave=hideTip;});
+    return `<div class="stat statrow" data-stat="${k}"><span class="statn"><span class="statdot" style="background:${c}"></span>${statName(k)}</span>
+      <span class="statv" style="color:${c}">${v}${g}</span></div>`;}).join('')+'</div>';
 }
-function showStatTip(k){const t=STAT_BREAKDOWN[k]; if(!t)return;
+function wireStatHover(container,tot){container.querySelectorAll('.statrow').forEach(row=>{
+  row.onmouseenter=()=>showStatTip(tot,row.dataset.stat); row.onmousemove=moveTip; row.onmouseleave=hideTip;});}
+function showStatTip(tot,k){const t=tot[k]; if(!t)return;
   if(!tipEl){tipEl=document.createElement('div'); tipEl.className='tip'; document.body.appendChild(tipEl);}
   const srcs=[...t.sources].sort((a,b)=>b.max-a.max);
   const rows=srcs.map(s=>`<div class="tipsrc"><span>${s.name}</span><span>+${s.min===s.max?s.min:s.min+'–'+s.max}</span></div>`).join('');
   const tv=t.min===t.max?t.min:t.min+'–'+t.max;
   tipEl.innerHTML=`<b style="color:${statColor(k)}">${statName(k)} ${tv}</b><div class="tiprows">${rows}</div>`;
   tipEl.style.display='block';}
+function renderStatTotals(){
+  const tot=equipStats();
+  const box=document.getElementById('stattotals');
+  if(!Object.keys(tot).length){box.innerHTML=`<div class="src">Equip gear (and optionally load your username) to see totals.</div>`; return;}
+  box.innerHTML=renderStatRows(tot)+
+    `<div class="legend" style="margin-top:10px">hover a stat for its sources · totals = base + scrolls + relics + equipped gear
+      (the API can't expose your default base HP, museum, pets, or what gear you're actually wearing)</div>`;
+  wireStatHover(box,tot);
+}
 let tipEl;
 function showSlotTip(id){const it=ITEMS[id]; if(!it)return;
   if(!tipEl){tipEl=document.createElement('div'); tipEl.className='tip'; document.body.appendChild(tipEl);}
