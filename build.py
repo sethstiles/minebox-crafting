@@ -790,6 +790,8 @@ function renderSkin(name){
         skin:'https://mc-heads.net/skin/'+encodeURIComponent(name)});
       skinViewer.animation=new skinview3d.WalkingAnimation();
       skinViewer.animation.speed=0.55; skinViewer.zoom=0.9;
+      const ctrl=skinview3d.createOrbitControls(skinViewer);   // SkinViewer doesn't auto-create them in v2
+      ctrl.enableRotate=true; ctrl.enableZoom=false; ctrl.enablePan=false;
     }catch(e){console.warn('skin render failed',e);}
   }).catch(()=>{});
 }
