@@ -184,7 +184,7 @@ h1 span{color:var(--accent2)}
    background:var(--panel);color:var(--text);font-size:14px;outline:none}
 #q:focus{border-color:var(--accent)}
 .count{color:var(--muted);font-size:12px}
-.wrap{display:grid;grid-template-columns:268px 402px minmax(0,1fr);gap:0;min-height:calc(100vh - 84px)}
+.wrap{display:grid;grid-template-columns:268px 430px minmax(0,1fr);gap:0;min-height:calc(100vh - 84px)}
 .list{border-right:1px solid var(--line);overflow:auto;max-height:calc(100vh - 84px)}
 .charcol{border-right:1px solid var(--line);overflow:auto;max-height:calc(100vh - 84px);padding:14px 14px 24px}
 .charhdr{font-size:15px;font-weight:600;margin-bottom:12px}
