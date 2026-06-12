@@ -1,0 +1,6 @@
+# Regenerable API dumps (run: python fetch_data.py)
+data/
+
+# Python
+__pycache__/
+*.pyc
