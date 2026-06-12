@@ -174,7 +174,12 @@ TEMPLATE = r"""<!DOCTYPE html>
   --bg:#14181c; --panel:#1b2127; --panel2:#222a31; --line:#2c353d;
   --text:#e6edf3; --muted:#93a1ad; --accent:#1D9E75; --accent2:#5DCAA5;
 }
-*{box-sizing:border-box}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:#33414c transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#2c353d;border-radius:8px;border:2px solid var(--bg);background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:#3f4c57;background-clip:padding-box}
+::-webkit-scrollbar-corner{background:transparent}
 body{margin:0;font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
 header{padding:16px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
 h1{margin:0 0 10px;font-size:18px;font-weight:600}
@@ -599,13 +604,19 @@ function showItemSummary(id){
   if(it.sources&&it.sources.length) h+=`<div class="sub">Gather: ${srcLabel(it)}</div>`;
   h+=`<div class="addrow">
       ${canEquip(it)?`<button class="addlist" id="equipbtn">Equip</button>`:''}
-      <button class="addlist" id="addlist" style="background:var(--panel2);color:var(--text);border:1px solid var(--line)">+ Craft list</button>
+      ${BUILD[id]?
+        `<span class="qstep" style="border:1px solid var(--line);border-radius:7px;padding:5px 10px">on list
+           <button data-bd="-1">−</button><b>${BUILD[id]}</b><button data-bd="1">+</button>
+           <span class="rm" id="rmlist" style="margin-left:6px">remove</span></span>`
+        :`<button class="addlist" id="addlist" style="background:var(--panel2);color:var(--text);border:1px solid var(--line)">+ Craft list</button>`}
       ${rec?`<button class="addlist" id="recipebtn" style="background:var(--panel2);color:var(--text);border:1px solid var(--line)">View crafting recipe →</button>`:''}
     </div></div>`;
   detail.innerHTML=h;
   const eb=document.getElementById('equipbtn'); if(eb)eb.onclick=()=>{if(equipItem(id)){eb.textContent='✓ Equipped'; refreshChar();}};
-  document.getElementById('addlist').onclick=()=>{addToBuild(id,1);
-    const b=document.getElementById('addlist'); b.textContent=`✓ on list (${BUILD[id]})`;};
+  const addb=document.getElementById('addlist'); if(addb)addb.onclick=()=>{addToBuild(id,1); showItemSummary(id);};
+  detail.querySelectorAll('[data-bd]').forEach(b=>b.onclick=()=>{BUILD[id]=(BUILD[id]||0)+(+b.dataset.bd);
+    if(BUILD[id]<=0) delete BUILD[id]; saveBuild(); showItemSummary(id);});
+  const rml=document.getElementById('rmlist'); if(rml)rml.onclick=()=>{delete BUILD[id]; saveBuild(); showItemSummary(id);};
   const rb=document.getElementById('recipebtn'); if(rb)rb.onclick=()=>showItemFull(id);
 }
 function showItemFull(id){
@@ -812,7 +823,7 @@ function ensureSkinview(){
   if(window.skinview3d) return Promise.resolve();
   if(SV_LOADING) return SV_LOADING;
   SV_LOADING=new Promise((res,rej)=>{const s=document.createElement('script');
-    s.src='https://cdn.jsdelivr.net/npm/skinview3d@2.2.1/bundles/skinview3d.bundle.js';
+    s.src='https://cdn.jsdelivr.net/npm/skinview3d@3.0.1/bundles/skinview3d.bundle.js';
     s.onload=res; s.onerror=rej; document.head.appendChild(s);});
   return SV_LOADING;
 }
@@ -826,8 +837,8 @@ function renderSkin(name){
         skin:'https://mc-heads.net/skin/'+encodeURIComponent(name)});
       skinViewer.animation=new skinview3d.WalkingAnimation();
       skinViewer.animation.speed=0.55; skinViewer.zoom=0.9;
-      const ctrl=skinview3d.createOrbitControls(skinViewer);   // SkinViewer doesn't auto-create them in v2
-      ctrl.enableRotate=true; ctrl.enableZoom=false; ctrl.enablePan=false;
+      // v3 SkinViewer auto-creates orbit controls (rotate on by default)
+      skinViewer.controls.enableZoom=false; skinViewer.controls.enablePan=false;
     }catch(e){console.warn('skin render failed',e);}
   }).catch(()=>{});
 }
