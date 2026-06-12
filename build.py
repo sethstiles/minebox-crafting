@@ -295,13 +295,14 @@ function updateListN(){const n=Object.keys(BUILD).length;
 function addToBuild(id,qty){BUILD[id]=(BUILD[id]||0)+qty; saveBuild();}
 // aggregate raw materials (leaves) across the whole craft list
 function rawAgg(){const acc={}; for(const [id,q] of Object.entries(BUILD)) rollup(id,q,new Set(),acc); return acc;}
-// aggregate EVERY component (intermediates + raws), excluding the target items
-function walkBom(id,mult,stack,acc){const rec=RECIPES[id];
-  if(!rec||stack.has(id)){acc[id]=(acc[id]||0)+mult; return;}
+// aggregate EVERY component (intermediates + raws) once each, excluding the target items
+function walkBom(id,mult,stack,acc,isTop){
+  if(!isTop) acc[id]=(acc[id]||0)+mult;
+  const rec=RECIPES[id];
+  if(!rec||stack.has(id)) return;
   const ns=new Set(stack); ns.add(id); const per=rec.amount||1;
-  for(const ing of rec.ingredients){const m=mult*ing.amount/per;
-    acc[ing.id]=(acc[ing.id]||0)+m; walkBom(ing.id,m,ns,acc);}}
-function bomAgg(){const acc={}; for(const [id,q] of Object.entries(BUILD)) walkBom(id,q,new Set(),acc); return acc;}
+  for(const ing of rec.ingredients) walkBom(ing.id,mult*ing.amount/per,ns,acc,false);}
+function bomAgg(){const acc={}; for(const [id,q] of Object.entries(BUILD)) walkBom(id,q,new Set(),acc,true); return acc;}
 
 function imgFor(id,cls){const it=ITEMS[id];
   if(it&&it.img) return `<img class="${cls}" src="data:image/png;base64,${it.img}" alt="">`;
