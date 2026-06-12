@@ -652,7 +652,7 @@ function equipItem(id){const it=ITEMS[id]; if(!canEquip(it))return false;
   const slots=slotForType(it.type); const t=slots.find(s=>!EQUIP[s.k])||slots[0];
   EQUIP[t.k]=id; saveEquip(); return true;}
 function showChar(){
-  sel=null; viewingList=false; renderList();
+  sel=null; viewingList=false; hideTip(); renderList();
   let h=`<div class="hd"><h2>Character</h2></div>
     <div class="charwrap"><div class="charleft">
       <div class="userrow">
