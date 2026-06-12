@@ -218,6 +218,36 @@ table.roll{border-collapse:collapse;width:100%;max-width:680px}
    font-weight:600;cursor:pointer;font-size:13px}
 .exist{display:flex;gap:5px;flex-wrap:wrap;flex-basis:100%}
 .exist .chip{cursor:pointer;opacity:.75}.exist .chip:hover{opacity:1}
+.listbtn{margin-left:auto;padding:9px 14px;border-radius:8px;border:1px solid var(--line);
+   background:var(--panel);color:var(--text);cursor:pointer;font-size:13px;white-space:nowrap}
+.listbtn:hover{border-color:var(--accent)}
+.listbtn span{color:#04221a;background:var(--accent2);border-radius:9px;padding:0 7px;margin-left:4px;font-weight:600}
+.addrow{display:flex;gap:12px;align-items:center;margin:12px 0 2px}
+.addlist{padding:8px 15px;border-radius:7px;border:none;background:var(--accent);color:#04221a;
+   font-weight:600;cursor:pointer;font-size:13px}
+.addlist:hover{filter:brightness(1.08)}
+.qstep{display:inline-flex;gap:8px;align-items:center;color:var(--muted);font-size:13px}
+.qstep button{width:24px;height:24px;border-radius:6px;border:1px solid var(--line);
+   background:var(--panel);color:var(--text);cursor:pointer;font-size:15px;line-height:1;padding:0}
+.qstep button:hover{border-color:var(--accent)}
+.qstep b{min-width:22px;text-align:center;color:var(--text)}
+.modetoggle{display:inline-flex;gap:6px;margin-left:12px;vertical-align:middle}
+.modetoggle button{font-size:11px;padding:2px 10px;border-radius:8px;border:1px solid var(--line);
+   background:none;color:var(--muted);cursor:pointer;text-transform:none;letter-spacing:0}
+.modetoggle button.on{background:var(--accent);color:#04221a;border-color:var(--accent);font-weight:600}
+.havein{width:58px;padding:4px 6px;border-radius:6px;border:1px solid var(--line);
+   background:var(--bg);color:var(--text);font-size:13px;text-align:right}
+.havechk{width:16px;height:16px;cursor:pointer;accent-color:var(--accent)}
+tr.doneRow{opacity:.5}
+tr.doneRow .mname{text-decoration:line-through}
+.left{color:var(--accent2);font-weight:500}
+.left.zero{color:var(--muted);font-weight:400}
+.rm{cursor:pointer;color:#E24B4A;font-size:12px}.rm:hover{text-decoration:underline}
+#clearlist{background:none;border:1px solid var(--line);color:var(--muted);border-radius:6px;
+   padding:3px 12px;cursor:pointer;font-size:12px}
+#clearlist:hover{border-color:#E24B4A;color:#E24B4A}
+.progress{height:6px;border-radius:3px;background:var(--line);overflow:hidden;max-width:680px;margin:2px 0 14px}
+.progress>span{display:block;height:100%;background:var(--accent)}
 </style></head>
 <body>
 <header>
@@ -225,6 +255,7 @@ table.roll{border-collapse:collapse;width:100%;max-width:680px}
   <div class="search">
     <input id="q" placeholder="Search items, or browse categories on the left..." autocomplete="off">
     <span class="count" id="count"></span>
+    <button class="listbtn" id="listbtn">Craft list <span id="listn">0</span></button>
   </div>
 </header>
 <div class="wrap">
@@ -252,6 +283,25 @@ function assignTag(id,name){const t=ITEMTAGS[id]||[]; if(!t.includes(name))t.pus
 function unassignTag(id,name){ITEMTAGS[id]=(ITEMTAGS[id]||[]).filter(x=>x!==name);
   if(!ITEMTAGS[id].length)delete ITEMTAGS[id]; saveTags();}
 function tagCount(name){return Object.values(ITEMTAGS).filter(a=>a.includes(name)).length;}
+
+// ---- craft list / planner (localStorage) ----------------------------------
+let BUILD = JSON.parse(localStorage.getItem('mb_build')||'{}');   // {itemId:qty}
+let HAVE  = JSON.parse(localStorage.getItem('mb_have')||'{}');    // {matId:qtyHave}
+let listMode='raw', viewingList=false;
+function saveBuild(){localStorage.setItem('mb_build',JSON.stringify(BUILD)); updateListN();}
+function saveHave(){localStorage.setItem('mb_have',JSON.stringify(HAVE));}
+function updateListN(){const n=Object.keys(BUILD).length;
+  document.getElementById('listn').textContent=n;}
+function addToBuild(id,qty){BUILD[id]=(BUILD[id]||0)+qty; saveBuild();}
+// aggregate raw materials (leaves) across the whole craft list
+function rawAgg(){const acc={}; for(const [id,q] of Object.entries(BUILD)) rollup(id,q,new Set(),acc); return acc;}
+// aggregate EVERY component (intermediates + raws), excluding the target items
+function walkBom(id,mult,stack,acc){const rec=RECIPES[id];
+  if(!rec||stack.has(id)){acc[id]=(acc[id]||0)+mult; return;}
+  const ns=new Set(stack); ns.add(id); const per=rec.amount||1;
+  for(const ing of rec.ingredients){const m=mult*ing.amount/per;
+    acc[ing.id]=(acc[ing.id]||0)+m; walkBom(ing.id,m,ns,acc);}}
+function bomAgg(){const acc={}; for(const [id,q] of Object.entries(BUILD)) walkBom(id,q,new Set(),acc); return acc;}
 
 function imgFor(id,cls){const it=ITEMS[id];
   if(it&&it.img) return `<img class="${cls}" src="data:image/png;base64,${it.img}" alt="">`;
@@ -356,7 +406,7 @@ function rollup(id,mult,stack,acc){
 function fmt(n){return Number.isInteger(n)?n:(Math.round(n*100)/100);}
 
 function showItem(id){
-  sel=id; renderList();
+  sel=id; viewingList=false; renderList();
   const it=ITEMS[id], rec=RECIPES[id];
   let h=`<div class="hd">${imgFor(id,'bigico')}<div>
       <h2>${it.name}</h2>
@@ -366,6 +416,11 @@ function showItem(id){
   h+=`<div class="sub">${rec?`Crafted by <b>${rec.job.toLowerCase()}</b> · makes ${rec.amount} per craft`
       :'Base material'+(it.sources.length?'':' (vendor / farm / vanilla)')}</div>`;
   h+=`<div id="tagzone"></div>`;
+  h+=`<div class="addrow">
+      <button class="addlist" id="addlist">+ Add to craft list</button>
+      <span class="qstep">qty <button id="aqm">−</button><b id="addq">1</b><button id="aqp">+</button></span>
+      ${BUILD[id]?`<span class="src">already on list: ${BUILD[id]}×</span>`:''}
+    </div>`;
   if(rec){
     h+=`<div class="section"><h3>Component tree</h3><div class="tree" id="tree"></div>
         <div class="legend">▾ click to expand · qty = amount to make 1 of this item</div></div>`;
@@ -380,6 +435,11 @@ function showItem(id){
   }
   detail.innerHTML=h;
   renderTagZone(id);
+  let aq=1; const aqEl=document.getElementById('addq');
+  document.getElementById('aqm').onclick=()=>{aq=Math.max(1,aq-1); aqEl.textContent=aq;};
+  document.getElementById('aqp').onclick=()=>{aq++; aqEl.textContent=aq;};
+  document.getElementById('addlist').onclick=()=>{addToBuild(id,aq);
+    const b=document.getElementById('addlist'); b.textContent=`✓ Added — ${BUILD[id]}× on list`;};
   if(rec){
     document.getElementById('tree').appendChild(buildNode(id,1,new Set()));
     const acc=rollup(id,1,new Set(),{});
@@ -422,6 +482,64 @@ function renderTagZone(id){
     TAGS[nm]=pendColor; assignTag(id,nm); showItem(id);};
 }
 
+// ---- craft list view (targets + aggregated totals + have/left) ------------
+function showList(){
+  viewingList=true; sel=null; renderList();
+  const ids=Object.keys(BUILD);
+  if(!ids.length){detail.innerHTML=`<div class="empty">Your craft list is empty.<br>
+    Open any item and hit <b>+ Add to craft list</b>.</div>`; return;}
+  let h=`<div class="hd"><h2>My craft list</h2></div>
+    <div class="sub">Pick what you want to make; totals and "what's left" update as you check things off.</div>`;
+  // targets
+  h+=`<div class="section"><h3>Items to make</h3><table class="roll">`;
+  for(const id of ids){const it=ITEMS[id]||{name:id};
+    h+=`<tr><td class="ic">${imgFor(id,'tico')}</td><td class="mname">${it.name}</td>
+      <td><span class="qstep"><button data-bq="${id}" data-d="-1">−</button>
+        <b>${BUILD[id]}</b><button data-bq="${id}" data-d="1">+</button></span></td>
+      <td class="n"><span class="rm" data-rm="${id}">remove</span></td></tr>`;}
+  h+=`</table></div>`;
+  // totals
+  const acc = listMode==='raw' ? rawAgg() : bomAgg();
+  const rows=Object.entries(acc).map(([rid,amt])=>[rid,Math.ceil(Math.round(amt*100)/100)])
+    .sort((a,b)=>b[1]-a[1]);
+  const done=rows.filter(([rid,need])=>(HAVE[rid]||0)>=need).length;
+  const pct=rows.length?Math.round(done/rows.length*100):0;
+  h+=`<div class="section"><h3>Totals — ${done}/${rows.length} complete
+      <span class="modetoggle">
+        <button data-mode="raw" class="${listMode==='raw'?'on':''}">Raw materials</button>
+        <button data-mode="all" class="${listMode==='all'?'on':''}">All components</button></span></h3>
+    <div class="progress"><span style="width:${pct}%"></span></div>
+    <table class="roll"><tr><th></th><th></th><th>Material</th><th>Best source</th>
+      <th>Need</th><th>Have</th><th>Left</th></tr>`;
+  for(const [rid,need] of rows){
+    const have=HAVE[rid]||0, left=Math.max(0,need-have), doneRow=have>=need;
+    const ri=ITEMS[rid]||{name:rid,sources:[]}, s=ri.sources&&ri.sources[0];
+    h+=`<tr class="${doneRow?'doneRow':''}">
+      <td><input type="checkbox" class="havechk" data-chk="${rid}" data-need="${need}" ${doneRow?'checked':''}></td>
+      <td class="ic">${imgFor(rid,'tico')}</td>
+      <td class="mname">${ri.name}</td>
+      <td class="base">${s?s.node+(s.chance!=null?` · ${s.chance}%`:''):'—'}</td>
+      <td class="n">${need}</td>
+      <td><input class="havein" type="number" min="0" data-have="${rid}" value="${have}"></td>
+      <td class="n left ${left?'':'zero'}">${left}</td></tr>`;}
+  h+=`</table>
+    <div class="legend" style="margin-top:12px"><button id="clearlist">Clear list</button>
+      &nbsp; tick the box (or type how many you have) to cross it off · totals combine every item above</div></div>`;
+  detail.innerHTML=h;
+  // wiring
+  detail.querySelectorAll('[data-bq]').forEach(b=>b.onclick=()=>{
+    const id=b.dataset.bq; BUILD[id]=(BUILD[id]||0)+(+b.dataset.d);
+    if(BUILD[id]<=0) delete BUILD[id]; saveBuild(); showList();});
+  detail.querySelectorAll('[data-rm]').forEach(e=>e.onclick=()=>{delete BUILD[e.dataset.rm]; saveBuild(); showList();});
+  detail.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{listMode=b.dataset.mode; showList();});
+  detail.querySelectorAll('.havechk').forEach(c=>c.onchange=()=>{
+    HAVE[c.dataset.chk]=c.checked?(+c.dataset.need):0; saveHave(); showList();});
+  detail.querySelectorAll('.havein').forEach(inp=>inp.onchange=()=>{
+    const v=Math.max(0,parseInt(inp.value)||0); HAVE[inp.dataset.have]=v; saveHave(); showList();});
+  document.getElementById('clearlist').onclick=()=>{
+    if(confirm('Clear the whole craft list?')){BUILD={}; saveBuild(); showList();}};
+}
+
 list.onclick=e=>{
   const r=e.target.closest('.row');
   if(r){ if(r.dataset.tagfilter){tagFilter=tagFilter===r.dataset.tagfilter?null:r.dataset.tagfilter; renderList(); return;}
@@ -429,7 +547,9 @@ list.onclick=e=>{
   const c=e.target.closest('.cathd');
   if(c){const k=c.dataset.cat; openCats.has(k)?openCats.delete(k):openCats.add(k); renderList();}
 };
+document.getElementById('listbtn').onclick=showList;
 q.oninput=()=>{tagFilter=null; renderList();};
+updateListN();
 renderList();
 </script>
 </body></html>"""
