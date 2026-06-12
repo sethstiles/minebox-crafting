@@ -43,17 +43,25 @@ harv_raw = json.load(open(os.path.join(SRC, "harvestables.json")))
 nodes = harv_raw if isinstance(harv_raw, list) else list(harv_raw.values())[0]
 drop_index = {}
 for n in nodes:
-    for d in n.get("drops", []):
+    drops = n.get("drops", [])
+    nid = n.get("id", "")
+    for d in drops:
         key = strip_prefix(d["item"])
+        # primary = this node IS the source for this item: the only drop, or the
+        # node's eponymous yield (ore_cobalt node -> ore_cobalt). Its `chance`
+        # is a weight (often 1), NOT a meaningful percent, so don't show it.
+        primary = len(drops) == 1 or key == nid or nid.endswith(key) or key.endswith(nid)
         drop_index.setdefault(key, []).append({
-            "node": n.get("name") or n.get("id"),
+            "node": n.get("name") or nid,
             "category": n.get("category", ""),
             "min_level": n.get("min_level"),
             "chance": d.get("chance", 0),
             "amount": d.get("amount", 1),
+            "primary": primary,
         })
+# best source first: primary nodes, then highest real drop %
 for k in drop_index:
-    drop_index[k].sort(key=lambda x: (x["chance"] is None, -(x["chance"] or 0)))
+    drop_index[k].sort(key=lambda x: (not x["primary"], -(x["chance"] or 0)))
 
 # ---- load full item metadata (name/rarity/level/type/image) ----------------
 items_full = {}
@@ -74,6 +82,14 @@ vanilla_icons = {}
 vp = os.path.join(SRC, "vanilla_icons.json")
 if os.path.exists(vp):
     vanilla_icons = json.load(open(vp))
+
+relic_stats = {}   # relicId -> {stat: value}
+rp = os.path.join(SRC, "relics.json")
+if os.path.exists(rp):
+    rraw = json.load(open(rp))
+    rlist = rraw if isinstance(rraw, list) else list(rraw.values())[0]
+    for r in rlist:
+        relic_stats[r["id"]] = r.get("stats") or {}
 
 # ---- type -> friendly category ---------------------------------------------
 CATS = [
@@ -136,7 +152,8 @@ for idstr in all_ids:
         entry["damages"] = m["damages"]   # {ELEMENT: [min,max]}
     items[idstr] = entry
 
-data = {"items": items, "recipes": recipes, "catOrder": CAT_ORDER, "attrs": attrs}
+data = {"items": items, "recipes": recipes, "catOrder": CAT_ORDER,
+        "attrs": attrs, "relics": relic_stats}
 blob = json.dumps(data, separators=(",", ":"))
 
 ncat = {}
@@ -298,6 +315,9 @@ tr.doneRow .mname{text-decoration:line-through}
 .tip{position:fixed;z-index:50;display:none;background:#0d1014;border:1px solid var(--line);
    border-radius:8px;padding:9px 11px;font-size:12px;max-width:240px;pointer-events:none}
 .tip b{font-size:13px;margin-right:6px}.tiprows{margin-top:6px;display:flex;flex-direction:column;gap:2px}
+.tipsrc{display:flex;justify-content:space-between;gap:16px}
+.tipsrc span:last-child{color:var(--accent2);font-variant-numeric:tabular-nums}
+.statrow{cursor:default}
 .row[draggable=true]{cursor:grab}
 </style></head>
 <body>
@@ -316,7 +336,7 @@ tr.doneRow .mname{text-decoration:line-through}
 </div>
 <script>
 const DATA = __DATA__;
-const ITEMS = DATA.items, RECIPES = DATA.recipes, CAT_ORDER = DATA.catOrder, ATTR = DATA.attrs||{};
+const ITEMS = DATA.items, RECIPES = DATA.recipes, CAT_ORDER = DATA.catOrder, ATTR = DATA.attrs||{}, RELICS = DATA.relics||{};
 const RAR_COLORS = {COMMON:'#93a1ad',UNCOMMON:'#63a022',RARE:'#378ADD',EPIC:'#7F77DD',LEGENDARY:'#EF9F27',MYTHIC:'#D4537E'};
 const TAG_PALETTE = ['#E24B4A','#EF9F27','#63a022','#1D9E75','#378ADD','#7F77DD','#D4537E','#93a1ad'];
 const list=document.getElementById('list'), detail=document.getElementById('detail'),
@@ -379,17 +399,20 @@ const SLOTS=[
 const SLOTBYKEY=Object.fromEntries(SLOTS.map(s=>[s.k,s]));
 function slotForType(t){return SLOTS.filter(s=>s.types.includes(t));}
 function canEquip(it){return it&&it.type&&slotForType(it.type).length>0;}
-// aggregate equipped + base + scrolls into per-stat {min,max}
+// aggregate base + scrolls + relics + equipped gear into per-stat totals,
+// keeping a per-source breakdown for the hover tooltip
 function equipStats(){
   const tot={};
-  function add(stat,mn,mx){const k=stat.toLowerCase(); (tot[k]=tot[k]||{min:0,max:0,gearMin:0,gearMax:0});
-    tot[k].min+=mn; tot[k].max+=mx;}
+  function ent(k){k=k.toLowerCase(); return tot[k]||(tot[k]={min:0,max:0,gearMin:0,gearMax:0,sources:[]});}
+  function add(name,stat,mn,mx,isGear){const e=ent(stat); e.min+=mn; e.max+=mx;
+    if(isGear){e.gearMin+=mn; e.gearMax+=mx;} e.sources.push({name,min:mn,max:mx});}
   if(BASESTATS){
-    for(const src of ['base','scrolls']) for(const [k,v] of Object.entries(BASESTATS[src]||{})) add(k,v,v);
+    const lbl={base:'Base',scrolls:'Scrolls',relics:'Relics'};
+    for(const src of ['base','scrolls','relics'])
+      for(const [k,v] of Object.entries(BASESTATS[src]||{})) if(v) add(lbl[src],k,v,v,false);
   }
   for(const id of Object.values(EQUIP)){const it=ITEMS[id]; if(!it||!it.stats)continue;
-    for(const [k,r] of Object.entries(it.stats)){const lk=k.toLowerCase();
-      add(k,r[0],r[1]); tot[lk].gearMin+=r[0]; tot[lk].gearMax+=r[1];}}
+    for(const [k,r] of Object.entries(it.stats)) add(it.name,k,r[0],r[1],true);}
   return tot;
 }
 
@@ -472,9 +495,15 @@ function rowHtml(it){
     <span class="lv">${it.level?'Lv'+it.level:''}</span></div>`;
 }
 
+// primary nodes (single-drop / eponymous, e.g. ore veins) show level, not a
+// misleading weight-as-percent; real drop-table sources show the %.
+function srcTail(s){return s.primary ? (s.min_level?` · Lv${s.min_level}`:' · gather')
+  : (s.chance!=null?` · ${s.chance}%`:'');}
+function srcLabel(it){if(!it.sources||!it.sources.length)return '—';
+  const s=it.sources[0]; return s.node+srcTail(s);}
 function srcText(it){if(!it.sources||!it.sources.length)return '';
-  const s=it.sources[0]; const pct=s.chance!=null?`${s.chance}%`:'';
-  return `<span class="src">${s.node}${pct?` · <span class="pct">${pct}</span>`:''}${it.sources.length>1?` +${it.sources.length-1}`:''}</span>`;}
+  const s=it.sources[0];
+  return `<span class="src">${s.node}${srcTail(s)}${it.sources.length>1?` +${it.sources.length-1}`:''}</span>`;}
 
 function buildNode(id,mult,stack){
   const it=ITEMS[id]||{id,name:id,craftable:!!RECIPES[id],sources:[]};
@@ -533,9 +562,10 @@ function showItem(id){
   }
   if(it.sources&&it.sources.length){
     h+=`<div class="section"><h3>Where to gather</h3><table class="roll">
-      <tr><th>Node</th><th>Category</th><th>Min lvl</th><th>Chance</th></tr>`+
+      <tr><th>Node</th><th>Category</th><th>Min lvl</th><th>Drop</th></tr>`+
       it.sources.map(s=>`<tr><td>${s.node}</td><td class="base">${s.category||''}</td>
-        <td class="base">${s.min_level??''}</td><td class="n">${s.chance!=null?s.chance+'%':'—'}</td></tr>`).join('')+
+        <td class="base">${s.min_level??''}</td>
+        <td class="n">${s.primary?'<span class="base">primary</span>':(s.chance!=null?s.chance+'%':'—')}</td></tr>`).join('')+
       `</table></div>`;
   }
   detail.innerHTML=h;
@@ -551,9 +581,9 @@ function showItem(id){
     document.getElementById('tree').appendChild(buildNode(id,1,new Set()));
     const acc=rollup(id,1,new Set(),{});
     const rows=Object.entries(acc).sort((a,b)=>b[1]-a[1]).map(([rid,amt])=>{
-      const ri=ITEMS[rid]||{name:rid,sources:[]}; const s=ri.sources&&ri.sources[0];
+      const ri=ITEMS[rid]||{name:rid,sources:[]};
       return `<tr><td class="ic">${imgFor(rid,'tico')}</td><td>${ri.name}</td>
-        <td class="base">${s?s.node+(s.chance!=null?` · ${s.chance}%`:''):'—'}</td>
+        <td class="base">${srcLabel(ri)}</td>
         <td class="n">${fmt(Math.ceil(amt*100)/100)}</td></tr>`;});
     document.getElementById('roll').innerHTML=
       `<tr><th></th><th>Raw material</th><th>Best source</th><th>Qty</th></tr>`+rows.join('');
@@ -620,12 +650,12 @@ function showList(){
       <th>Need</th><th>Have</th><th>Left</th></tr>`;
   for(const [rid,need] of rows){
     const have=HAVE[rid]||0, left=Math.max(0,need-have), doneRow=have>=need;
-    const ri=ITEMS[rid]||{name:rid,sources:[]}, s=ri.sources&&ri.sources[0];
+    const ri=ITEMS[rid]||{name:rid,sources:[]};
     h+=`<tr class="${doneRow?'doneRow':''}">
       <td><input type="checkbox" class="havechk" data-chk="${rid}" data-need="${need}" ${doneRow?'checked':''}></td>
       <td class="ic">${imgFor(rid,'tico')}</td>
       <td class="mname">${ri.name}</td>
-      <td class="base">${s?s.node+(s.chance!=null?` · ${s.chance}%`:''):'—'}</td>
+      <td class="base">${srcLabel(ri)}</td>
       <td class="n">${need}</td>
       <td><input class="havein" type="number" min="0" data-have="${rid}" value="${have}"></td>
       <td class="n left ${left?'':'zero'}">${left}</td></tr>`;}
@@ -660,7 +690,7 @@ function showChar(){
         <button id="loaduser">Load my stats</button>
         ${BASESTATS?`<span class="src">base+scrolls loaded${BASENAME?': '+BASENAME:''}</span>`:''}
       </div>
-      <div class="slotgrid">`;
+      <div class="slotgrid" id="slotgrid">`;
   for(const s of SLOTS){const id=EQUIP[s.k], it=id?ITEMS[id]:null;
     h+=`<div class="slot${it?' filled':''}" data-slot="${s.k}" data-types="${s.types.join(',')}">
       ${it?imgFor(id,'slotico'):'<span class="slotph"></span>'}
@@ -674,8 +704,9 @@ function showChar(){
     el.ondragover=e=>{e.preventDefault(); el.classList.add('drop');};
     el.ondragleave=()=>el.classList.remove('drop');
     el.ondrop=e=>{e.preventDefault(); el.classList.remove('drop');
-      const id=e.dataTransfer.getData('text/plain'); const it=ITEMS[id];
-      if(it&&el.dataset.types.split(',').includes(it.type)){EQUIP[el.dataset.slot]=id; saveEquip(); showChar();}
+      const id=e.dataTransfer.getData('text/plain'); const it=ITEMS[id]; if(!it)return;
+      if(el.dataset.types.split(',').includes(it.type)){EQUIP[el.dataset.slot]=id; saveEquip(); showChar();}
+      else if(equipItem(id)){showChar();}                 // wrong slot -> snap to the right one
       else{el.classList.add('bad'); setTimeout(()=>el.classList.remove('bad'),350);}};});
   detail.querySelectorAll('[data-unequip]').forEach(x=>x.onclick=e=>{e.stopPropagation();
     delete EQUIP[x.dataset.unequip]; saveEquip(); showChar();});
@@ -684,8 +715,9 @@ function showChar(){
     el.onmousemove=moveTip; el.onmouseleave=hideTip;});
   document.getElementById('loaduser').onclick=loadUserStats;
 }
+let STAT_BREAKDOWN={};
 function renderStatTotals(){
-  const tot=equipStats(); const order=Object.keys(ATTR);
+  const tot=equipStats(); STAT_BREAKDOWN=tot; const order=Object.keys(ATTR);
   const keys=Object.keys(tot).sort((a,b)=>(order.indexOf(a)<0?99:order.indexOf(a))-(order.indexOf(b)<0?99:order.indexOf(b)));
   const box=document.getElementById('stattotals');
   if(!keys.length){box.innerHTML=`<div class="src">Equip gear (and optionally load your username) to see totals.</div>`; return;}
@@ -693,10 +725,21 @@ function renderStatTotals(){
   for(const k of keys){const t=tot[k], c=statColor(k);
     const v=t.min===t.max?`${t.min}`:`${t.min}–${t.max}`;
     const g=(t.gearMin||t.gearMax)?` <span class="src">(gear +${t.gearMin===t.gearMax?t.gearMin:t.gearMin+'–'+t.gearMax})</span>`:'';
-    h+=`<div class="stat"><span class="statn"><span class="statdot" style="background:${c}"></span>${statName(k)}</span>
+    h+=`<div class="stat statrow" data-stat="${k}"><span class="statn"><span class="statdot" style="background:${c}"></span>${statName(k)}</span>
       <span class="statv" style="color:${c}">${v}${g}</span></div>`;}
-  box.innerHTML=h+'</div>';
+  box.innerHTML=h+'</div>'+
+    `<div class="legend" style="margin-top:10px">hover a stat for its sources · totals = base + scrolls + relics + equipped gear
+      (the API can't expose your default base HP, museum, pets, or what gear you're actually wearing)</div>`;
+  box.querySelectorAll('.statrow').forEach(row=>{
+    row.onmouseenter=()=>showStatTip(row.dataset.stat); row.onmousemove=moveTip; row.onmouseleave=hideTip;});
 }
+function showStatTip(k){const t=STAT_BREAKDOWN[k]; if(!t)return;
+  if(!tipEl){tipEl=document.createElement('div'); tipEl.className='tip'; document.body.appendChild(tipEl);}
+  const srcs=[...t.sources].sort((a,b)=>b.max-a.max);
+  const rows=srcs.map(s=>`<div class="tipsrc"><span>${s.name}</span><span>+${s.min===s.max?s.min:s.min+'–'+s.max}</span></div>`).join('');
+  const tv=t.min===t.max?t.min:t.min+'–'+t.max;
+  tipEl.innerHTML=`<b style="color:${statColor(k)}">${statName(k)} ${tv}</b><div class="tiprows">${rows}</div>`;
+  tipEl.style.display='block';}
 let tipEl;
 function showSlotTip(id){const it=ITEMS[id]; if(!it)return;
   if(!tipEl){tipEl=document.createElement('div'); tipEl.className='tip'; document.body.appendChild(tipEl);}
@@ -713,7 +756,10 @@ function loadUserStats(){
     .then(r=>r.ok?r.json():Promise.reject(r.status))
     .then(d=>{const a=d.data&&d.data.ATTRIBUTED_STATS;
       if(!a){btn.textContent='No stats found'; return;}
-      BASESTATS={base:a.base||{},scrolls:a.scrolls||{}}; BASENAME=d.username||u;
+      const relics={}; const unlocked=Object.keys((d.data.OBJECTIVES&&d.data.OBJECTIVES.relics)||{});
+      for(const rid of unlocked){const st=RELICS[rid]||{};
+        for(const [k,v] of Object.entries(st)) relics[k]=(relics[k]||0)+v;}
+      BASESTATS={base:a.base||{},scrolls:a.scrolls||{},relics}; BASENAME=d.username||u;
       localStorage.setItem('mb_basestats',JSON.stringify(BASESTATS));
       localStorage.setItem('mb_basename',BASENAME); showChar();})
     .catch(err=>{btn.textContent='Not found ('+err+')';});
@@ -721,6 +767,10 @@ function loadUserStats(){
 
 list.addEventListener('dragstart',e=>{const r=e.target.closest('.row');
   if(r&&r.dataset.id) e.dataTransfer.setData('text/plain',r.dataset.id);});
+list.addEventListener('dblclick',e=>{const r=e.target.closest('.row');
+  if(r&&r.dataset.id&&equipItem(r.dataset.id)){
+    if(document.getElementById('slotgrid')) showChar();          // refresh if char view open
+    else{const eb=document.getElementById('equipbtn'); if(eb&&sel===r.dataset.id) eb.textContent='✓ Equipped';}}});
 list.onclick=e=>{
   const r=e.target.closest('.row');
   if(r){ if(r.dataset.tagfilter){tagFilter=tagFilter===r.dataset.tagfilter?null:r.dataset.tagfilter; renderList(); return;}
