@@ -272,6 +272,33 @@ tr.doneRow .mname{text-decoration:line-through}
 .statn{display:flex;align-items:center;gap:7px;color:var(--text)}
 .statdot{width:8px;height:8px;border-radius:2px;flex:none}
 .statv{font-variant-numeric:tabular-nums;font-weight:500}
+.charwrap{display:flex;gap:32px;flex-wrap:wrap;align-items:flex-start;margin-top:6px}
+.charleft{flex:0 0 auto}
+.charright{flex:1;min-width:260px;max-width:460px}
+.charright h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
+.userrow{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
+.userrow input{padding:8px 10px;border-radius:7px;border:1px solid var(--line);
+   background:var(--panel);color:var(--text);font-size:13px;width:230px}
+.userrow button{padding:8px 14px;border-radius:7px;border:none;background:var(--accent);
+   color:#04221a;font-weight:600;cursor:pointer;font-size:13px}
+.slotgrid{display:grid;grid-template-columns:repeat(3,118px);gap:10px}
+.slot{position:relative;height:118px;border:1px solid var(--line);border-radius:10px;background:var(--panel);
+   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;transition:border-color .1s}
+.slot.filled{background:var(--panel2);cursor:pointer}
+.slot.drop{border-color:var(--accent);background:#10261f}
+.slot.bad{border-color:#E24B4A;animation:shake .3s}
+@keyframes shake{25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+.slotico{width:50px;height:50px;image-rendering:pixelated;object-fit:contain}
+.slotph{width:42px;height:42px;border-radius:8px;border:1px dashed var(--line)}
+.slotlabel{font-size:11px;color:var(--muted);text-align:center;padding:0 5px;max-width:110px;
+   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slot.filled .slotlabel{color:var(--text)}
+.slotx{position:absolute;top:5px;right:7px;color:#E24B4A;font-size:12px;cursor:pointer;opacity:.55}
+.slotx:hover{opacity:1}
+.tip{position:fixed;z-index:50;display:none;background:#0d1014;border:1px solid var(--line);
+   border-radius:8px;padding:9px 11px;font-size:12px;max-width:240px;pointer-events:none}
+.tip b{font-size:13px;margin-right:6px}.tiprows{margin-top:6px;display:flex;flex-direction:column;gap:2px}
+.row[draggable=true]{cursor:grab}
 </style></head>
 <body>
 <header>
@@ -279,6 +306,7 @@ tr.doneRow .mname{text-decoration:line-through}
   <div class="search">
     <input id="q" placeholder="Search items, or browse categories on the left..." autocomplete="off">
     <span class="count" id="count"></span>
+    <button class="listbtn" id="charbtn">Character</button>
     <button class="listbtn" id="listbtn">Craft list <span id="listn">0</span></button>
   </div>
 </header>
@@ -327,6 +355,43 @@ function walkBom(id,mult,stack,acc,isTop){
   const ns=new Set(stack); ns.add(id); const per=rec.amount||1;
   for(const ing of rec.ingredients) walkBom(ing.id,mult*ing.amount/per,ns,acc,false);}
 function bomAgg(){const acc={}; for(const [id,q] of Object.entries(BUILD)) walkBom(id,q,new Set(),acc,true); return acc;}
+
+// ---- character / equipment loadout ----------------------------------------
+let EQUIP = JSON.parse(localStorage.getItem('mb_equip')||'{}');   // {slotKey:itemId}
+let BASESTATS = JSON.parse(localStorage.getItem('mb_basestats')||'null'); // {base:{},scrolls:{}}
+let BASENAME = localStorage.getItem('mb_basename')||'';
+function saveEquip(){localStorage.setItem('mb_equip',JSON.stringify(EQUIP));}
+// slot key -> {label, type(s) accepted, row, col}
+const SLOTS=[
+  {k:'necklace',label:'Necklace',types:['NECKLACE']},
+  {k:'helmet',  label:'Helmet',  types:['HELMET']},
+  {k:'ring1',   label:'Ring',    types:['RING']},
+  {k:'back',    label:'Back',    types:['BACK']},
+  {k:'chest',   label:'Chest',   types:['CHESTPLATE']},
+  {k:'ring2',   label:'Ring',    types:['RING']},
+  {k:'belt',    label:'Belt',    types:['BELT']},
+  {k:'legs',    label:'Legs',    types:['LEGGINGS']},
+  {k:'gloves',  label:'Gloves',  types:['GLOVES']},
+  {k:'mount',   label:'Mount',   types:['MOUNT']},
+  {k:'boots',   label:'Boots',   types:['BOOTS']},
+  {k:'pet',     label:'Pet',     types:['PET']},
+];
+const SLOTBYKEY=Object.fromEntries(SLOTS.map(s=>[s.k,s]));
+function slotForType(t){return SLOTS.filter(s=>s.types.includes(t));}
+function canEquip(it){return it&&it.type&&slotForType(it.type).length>0;}
+// aggregate equipped + base + scrolls into per-stat {min,max}
+function equipStats(){
+  const tot={};
+  function add(stat,mn,mx){const k=stat.toLowerCase(); (tot[k]=tot[k]||{min:0,max:0,gearMin:0,gearMax:0});
+    tot[k].min+=mn; tot[k].max+=mx;}
+  if(BASESTATS){
+    for(const src of ['base','scrolls']) for(const [k,v] of Object.entries(BASESTATS[src]||{})) add(k,v,v);
+  }
+  for(const id of Object.values(EQUIP)){const it=ITEMS[id]; if(!it||!it.stats)continue;
+    for(const [k,r] of Object.entries(it.stats)){const lk=k.toLowerCase();
+      add(k,r[0],r[1]); tot[lk].gearMin+=r[0]; tot[lk].gearMax+=r[1];}}
+  return tot;
+}
 
 function imgFor(id,cls){const it=ITEMS[id];
   if(it&&it.img) return `<img class="${cls}" src="data:image/png;base64,${it.img}" alt="">`;
@@ -399,7 +464,7 @@ function renderList(){
 }
 function rowHtml(it){
   const tg=itemTags(it.id);
-  return `<div class="row${sel===it.id?' sel':''}" data-id="${it.id}">
+  return `<div class="row${sel===it.id?' sel':''}" data-id="${it.id}" draggable="true">
     ${imgFor(it.id,'ico')}
     ${rdot(it.rarity)}
     <span class="nm">${it.name}</span>
@@ -457,6 +522,7 @@ function showItem(id){
   h+=`<div class="addrow">
       <button class="addlist" id="addlist">+ Add to craft list</button>
       <span class="qstep">qty <button id="aqm">−</button><b id="addq">1</b><button id="aqp">+</button></span>
+      ${canEquip(it)?`<button class="addlist" id="equipbtn" style="background:var(--panel2);color:var(--text);border:1px solid var(--line)">Equip</button>`:''}
       ${BUILD[id]?`<span class="src">already on list: ${BUILD[id]}×</span>`:''}
     </div>`;
   h+=statsBlock(it);
@@ -479,6 +545,8 @@ function showItem(id){
   document.getElementById('aqp').onclick=()=>{aq++; aqEl.textContent=aq;};
   document.getElementById('addlist').onclick=()=>{addToBuild(id,aq);
     const b=document.getElementById('addlist'); b.textContent=`✓ Added — ${BUILD[id]}× on list`;};
+  const eb=document.getElementById('equipbtn');
+  if(eb) eb.onclick=()=>{if(equipItem(id)) eb.textContent='✓ Equipped';};
   if(rec){
     document.getElementById('tree').appendChild(buildNode(id,1,new Set()));
     const acc=rollup(id,1,new Set(),{});
@@ -579,6 +647,80 @@ function showList(){
     if(confirm('Clear the whole craft list?')){BUILD={}; saveBuild(); showList();}};
 }
 
+// ---- character view -------------------------------------------------------
+function equipItem(id){const it=ITEMS[id]; if(!canEquip(it))return false;
+  const slots=slotForType(it.type); const t=slots.find(s=>!EQUIP[s.k])||slots[0];
+  EQUIP[t.k]=id; saveEquip(); return true;}
+function showChar(){
+  sel=null; viewingList=false; renderList();
+  let h=`<div class="hd"><h2>Character</h2></div>
+    <div class="charwrap"><div class="charleft">
+      <div class="userrow">
+        <input id="charuser" type="text" placeholder="Minecraft username (optional)" value="${BASENAME||''}">
+        <button id="loaduser">Load my stats</button>
+        ${BASESTATS?`<span class="src">base+scrolls loaded${BASENAME?': '+BASENAME:''}</span>`:''}
+      </div>
+      <div class="slotgrid">`;
+  for(const s of SLOTS){const id=EQUIP[s.k], it=id?ITEMS[id]:null;
+    h+=`<div class="slot${it?' filled':''}" data-slot="${s.k}" data-types="${s.types.join(',')}">
+      ${it?imgFor(id,'slotico'):'<span class="slotph"></span>'}
+      <span class="slotlabel">${it?it.name:s.label}</span>
+      ${it?`<span class="slotx" data-unequip="${s.k}">✕</span>`:''}</div>`;}
+  h+=`</div><div class="legend">drag an item from the left onto a matching slot · ✕ to remove</div>
+    </div><div class="charright"><h3>Total stats</h3><div id="stattotals"></div></div></div>`;
+  detail.innerHTML=h;
+  renderStatTotals();
+  detail.querySelectorAll('.slot').forEach(el=>{
+    el.ondragover=e=>{e.preventDefault(); el.classList.add('drop');};
+    el.ondragleave=()=>el.classList.remove('drop');
+    el.ondrop=e=>{e.preventDefault(); el.classList.remove('drop');
+      const id=e.dataTransfer.getData('text/plain'); const it=ITEMS[id];
+      if(it&&el.dataset.types.split(',').includes(it.type)){EQUIP[el.dataset.slot]=id; saveEquip(); showChar();}
+      else{el.classList.add('bad'); setTimeout(()=>el.classList.remove('bad'),350);}};});
+  detail.querySelectorAll('[data-unequip]').forEach(x=>x.onclick=e=>{e.stopPropagation();
+    delete EQUIP[x.dataset.unequip]; saveEquip(); showChar();});
+  detail.querySelectorAll('.slot.filled').forEach(el=>{
+    el.onmouseenter=()=>showSlotTip(EQUIP[el.dataset.slot]);
+    el.onmousemove=moveTip; el.onmouseleave=hideTip;});
+  document.getElementById('loaduser').onclick=loadUserStats;
+}
+function renderStatTotals(){
+  const tot=equipStats(); const order=Object.keys(ATTR);
+  const keys=Object.keys(tot).sort((a,b)=>(order.indexOf(a)<0?99:order.indexOf(a))-(order.indexOf(b)<0?99:order.indexOf(b)));
+  const box=document.getElementById('stattotals');
+  if(!keys.length){box.innerHTML=`<div class="src">Equip gear (and optionally load your username) to see totals.</div>`; return;}
+  let h='<div class="statgrid" style="grid-template-columns:1fr">';
+  for(const k of keys){const t=tot[k], c=statColor(k);
+    const v=t.min===t.max?`${t.min}`:`${t.min}–${t.max}`;
+    const g=(t.gearMin||t.gearMax)?` <span class="src">(gear +${t.gearMin===t.gearMax?t.gearMin:t.gearMin+'–'+t.gearMax})</span>`:'';
+    h+=`<div class="stat"><span class="statn"><span class="statdot" style="background:${c}"></span>${statName(k)}</span>
+      <span class="statv" style="color:${c}">${v}${g}</span></div>`;}
+  box.innerHTML=h+'</div>';
+}
+let tipEl;
+function showSlotTip(id){const it=ITEMS[id]; if(!it)return;
+  if(!tipEl){tipEl=document.createElement('div'); tipEl.className='tip'; document.body.appendChild(tipEl);}
+  let rows=''; if(it.stats) for(const [k,r] of Object.entries(it.stats))
+    rows+=`<div><span style="color:${statColor(k)}">${statName(k)}</span> +${r[0]===r[1]?r[0]:r[0]+'–'+r[1]}</div>`;
+  tipEl.innerHTML=`<b>${it.name}</b>${rarPill(it.rarity)}<div class="tiprows">${rows||'<span class="src">no stats</span>'}</div>`;
+  tipEl.style.display='block';}
+function moveTip(e){if(tipEl){tipEl.style.left=Math.min(e.clientX+14,innerWidth-260)+'px'; tipEl.style.top=(e.clientY+14)+'px';}}
+function hideTip(){if(tipEl)tipEl.style.display='none';}
+function loadUserStats(){
+  const u=document.getElementById('charuser').value.trim(); if(!u)return;
+  const btn=document.getElementById('loaduser'); btn.textContent='Loading…';
+  fetch('https://api.minebox.co/data/'+encodeURIComponent(u))
+    .then(r=>r.ok?r.json():Promise.reject(r.status))
+    .then(d=>{const a=d.data&&d.data.ATTRIBUTED_STATS;
+      if(!a){btn.textContent='No stats found'; return;}
+      BASESTATS={base:a.base||{},scrolls:a.scrolls||{}}; BASENAME=d.username||u;
+      localStorage.setItem('mb_basestats',JSON.stringify(BASESTATS));
+      localStorage.setItem('mb_basename',BASENAME); showChar();})
+    .catch(err=>{btn.textContent='Not found ('+err+')';});
+}
+
+list.addEventListener('dragstart',e=>{const r=e.target.closest('.row');
+  if(r&&r.dataset.id) e.dataTransfer.setData('text/plain',r.dataset.id);});
 list.onclick=e=>{
   const r=e.target.closest('.row');
   if(r){ if(r.dataset.tagfilter){tagFilter=tagFilter===r.dataset.tagfilter?null:r.dataset.tagfilter; renderList(); return;}
@@ -586,6 +728,7 @@ list.onclick=e=>{
   const c=e.target.closest('.cathd');
   if(c){const k=c.dataset.cat; openCats.has(k)?openCats.delete(k):openCats.add(k); renderList();}
 };
+document.getElementById('charbtn').onclick=showChar;
 document.getElementById('listbtn').onclick=showList;
 q.oninput=()=>{tagFilter=null; renderList();};
 updateListN();
