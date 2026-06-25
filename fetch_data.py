@@ -25,18 +25,28 @@ os.makedirs(DATA, exist_ok=True)
 def get(path):
     req = urllib.request.Request(BASE + path, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode())
+        body = r.read().decode().strip()
+    return json.loads(body) if body else None
 
 def save(name, obj):
+    if obj is None:
+        print("  (skip", name, "- empty response)"); return
     json.dump(obj, open(os.path.join(DATA, name), "w"))
+
+def try_save(name, path):
+    try:
+        save(name, get(path))
+    except Exception as e:
+        print("  (skip", name, "-", e, ")")
 
 def main():
     for j in JOBS:
         save(f"recipes_{j}.json", get(f"/recipes?job={j}"))
         print("recipes", j)
         time.sleep(1.2)
-    save("harvestables.json", get("/harvestables")); print("harvestables")
-    save("collections.json", get("/collections")); print("collections")
+    try_save("harvestables.json", "/harvestables"); print("harvestables")
+    try_save("collections.json", "/collections"); print("collections")
+    try_save("sets.json", "/sets"); print("sets")
 
     page, n = 1, 0
     while True:

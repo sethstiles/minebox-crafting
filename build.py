@@ -91,6 +91,20 @@ if os.path.exists(rp):
     for r in rlist:
         relic_stats[r["id"]] = r.get("stats") or {}
 
+# ---- set bonuses (/sets) ---------------------------------------------------
+# item.set is a display name (e.g. "Astral set"); match it to the set def's
+# `name`. bonuses are keyed by piece-count threshold and are the CUMULATIVE
+# total at that threshold (wear N pieces -> take the highest threshold <= N).
+sets_by_name = {}   # set display-name -> {id, name, bonuses}
+sp = os.path.join(SRC, "sets.json")
+if os.path.exists(sp):
+    sraw = json.load(open(sp, encoding="utf-8", errors="replace"))
+    slist = sraw.get("sets") if isinstance(sraw, dict) else sraw
+    for s in (slist or []):
+        nm = s.get("name")
+        if nm:
+            sets_by_name[nm] = {"id": s.get("id"), "name": nm, "bonuses": s.get("bonuses") or {}}
+
 # ---- type -> friendly category ---------------------------------------------
 CATS = [
     ("Weapons",       {"LONG_SWORD","SWORD","DAGGER","BOW","GUN","STAFF","HAMMER"}),
@@ -150,10 +164,12 @@ for idstr in all_ids:
         entry["stats"] = m["stats"]       # {STAT: [min,max]}
     if m.get("damages"):
         entry["damages"] = m["damages"]   # {ELEMENT: [min,max]}
+    if m.get("set"):
+        entry["set"] = m["set"]           # set display-name (links to DATA.sets)
     items[idstr] = entry
 
 data = {"items": items, "recipes": recipes, "catOrder": CAT_ORDER,
-        "attrs": attrs, "relics": relic_stats}
+        "attrs": attrs, "relics": relic_stats, "sets": sets_by_name}
 blob = json.dumps(data, separators=(",", ":"))
 
 ncat = {}
@@ -344,6 +360,27 @@ tr.doneRow .mname{text-decoration:line-through}
 .tipsrc span:last-child{color:var(--accent2);font-variant-numeric:tabular-nums}
 .statrow{cursor:default}
 .row[draggable=true]{cursor:grab}
+.listtabs{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+.ltab{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:9px;border:1px solid var(--line);
+   background:var(--panel);color:var(--muted);cursor:pointer;font-size:13px;user-select:none}
+.ltab:hover{border-color:var(--accent)}
+.ltab.on{background:var(--panel2);color:var(--text);border-color:var(--accent);font-weight:500}
+.ltab .cnt{font-size:11px;color:#04221a;background:var(--accent2);border-radius:8px;padding:0 6px;font-weight:600}
+.ltab.on .cnt{color:#04221a}
+.ltab .lx{opacity:.45;font-size:11px}.ltab .lx:hover{opacity:1;color:#E24B4A}
+.ltab.add{border-style:dashed}
+.rmall{float:right;font-size:11px;padding:2px 11px;border-radius:8px;border:1px solid var(--line);
+   background:none;color:var(--muted);cursor:pointer;text-transform:none;letter-spacing:0;font-weight:500}
+.rmall:hover{border-color:#E24B4A;color:#E24B4A}
+.rmall.equipall:hover{border-color:var(--accent);color:var(--accent2)}
+.setbonus{display:flex;flex-direction:column;gap:4px;margin-bottom:12px;font-size:13px;max-width:560px}
+.setrow b{display:inline-block;min-width:42px;color:var(--accent2);margin-right:10px;font-variant-numeric:tabular-nums}
+.setpieces{display:flex;flex-wrap:wrap;gap:7px;max-width:600px}
+.setpiece{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 9px;border-radius:8px;
+   border:1px solid var(--line);background:var(--panel);cursor:pointer;color:var(--muted)}
+.setpiece:hover{border-color:var(--accent);color:var(--text)}
+.setpiece.cur{border-color:var(--accent);color:var(--text);background:var(--panel2)}
+.setpiece .tico{width:18px;height:18px}
 </style></head>
 <body>
 <header>
@@ -362,7 +399,7 @@ tr.doneRow .mname{text-decoration:line-through}
 </div>
 <script>
 const DATA = __DATA__;
-const ITEMS = DATA.items, RECIPES = DATA.recipes, CAT_ORDER = DATA.catOrder, ATTR = DATA.attrs||{}, RELICS = DATA.relics||{};
+const ITEMS = DATA.items, RECIPES = DATA.recipes, CAT_ORDER = DATA.catOrder, ATTR = DATA.attrs||{}, RELICS = DATA.relics||{}, SETS = DATA.sets||{};
 const RAR_COLORS = {COMMON:'#93a1ad',UNCOMMON:'#63a022',RARE:'#378ADD',EPIC:'#7F77DD',LEGENDARY:'#EF9F27',MYTHIC:'#D4537E'};
 const TAG_PALETTE = ['#E24B4A','#EF9F27','#63a022','#1D9E75','#378ADD','#7F77DD','#D4537E','#93a1ad'];
 const list=document.getElementById('list'), detail=document.getElementById('detail'),
@@ -382,15 +419,41 @@ function unassignTag(id,name){ITEMTAGS[id]=(ITEMTAGS[id]||[]).filter(x=>x!==name
   if(!ITEMTAGS[id].length)delete ITEMTAGS[id]; saveTags();}
 function tagCount(name){return Object.values(ITEMTAGS).filter(a=>a.includes(name)).length;}
 
-// ---- craft list / planner (localStorage) ----------------------------------
-let BUILD = JSON.parse(localStorage.getItem('mb_build')||'{}');   // {itemId:qty}
-let HAVE  = JSON.parse(localStorage.getItem('mb_have')||'{}');    // {matId:qtyHave}
+// ---- craft lists / planner (localStorage, up to 5 named lists) ------------
+// BUILD/HAVE always point at the ACTIVE list's items/have objects.
+const MAXLISTS=5;
+let LISTS = JSON.parse(localStorage.getItem('mb_lists')||'null');  // {id:{name,items,have}}
+let ACTIVE = localStorage.getItem('mb_active')||'';
+if(!LISTS){   // migrate the old single mb_build/mb_have into list 1
+  LISTS={l1:{name:'My craft list',
+    items:JSON.parse(localStorage.getItem('mb_build')||'{}'),
+    have :JSON.parse(localStorage.getItem('mb_have')||'{}')}};
+  ACTIVE='l1';
+}
+if(!LISTS[ACTIVE]) ACTIVE=Object.keys(LISTS)[0];
+let BUILD=LISTS[ACTIVE].items, HAVE=LISTS[ACTIVE].have;
 let listMode='raw', viewingList=false;
-function saveBuild(){localStorage.setItem('mb_build',JSON.stringify(BUILD)); updateListN();}
-function saveHave(){localStorage.setItem('mb_have',JSON.stringify(HAVE));}
-function updateListN(){const n=Object.keys(BUILD).length;
-  document.getElementById('listn').textContent=n;}
+function saveLists(){localStorage.setItem('mb_lists',JSON.stringify(LISTS));
+  localStorage.setItem('mb_active',ACTIVE);}
+function saveBuild(){saveLists(); updateListN();}
+function saveHave(){saveLists();}
+function updateListN(){document.getElementById('listn').textContent=Object.keys(BUILD).length;}
 function addToBuild(id,qty){BUILD[id]=(BUILD[id]||0)+qty; saveBuild();}
+function clearActiveList(){LISTS[ACTIVE].items={}; LISTS[ACTIVE].have={};
+  BUILD=LISTS[ACTIVE].items; HAVE=LISTS[ACTIVE].have; saveLists(); updateListN();}
+function setActiveList(id){if(!LISTS[id])return; ACTIVE=id; BUILD=LISTS[id].items; HAVE=LISTS[id].have;
+  saveLists(); updateListN(); showList();}
+function newList(){const ids=Object.keys(LISTS); if(ids.length>=MAXLISTS)return;
+  let i=1; while(LISTS['l'+i])i++; const id='l'+i;
+  LISTS[id]={name:'List '+(ids.length+1),items:{},have:{}}; setActiveList(id);}
+function renameList(id){const cur=LISTS[id]; if(!cur)return;
+  const nm=prompt('Rename list:',cur.name); if(nm&&nm.trim()){cur.name=nm.trim().slice(0,28); saveLists(); showList();}}
+function deleteList(id){
+  if(Object.keys(LISTS).length<=1){LISTS[id].items={}; LISTS[id].have={}; setActiveList(id); return;}
+  if(!confirm('Delete list "'+LISTS[id].name+'"?'))return;
+  delete LISTS[id]; if(ACTIVE===id)ACTIVE=Object.keys(LISTS)[0];
+  BUILD=LISTS[ACTIVE].items; HAVE=LISTS[ACTIVE].have; saveLists(); updateListN(); showList();}
+saveLists();   // persist the migrated/normalized shape on first load
 // aggregate raw materials (leaves) across the whole craft list
 function rawAgg(){const acc={}; for(const [id,q] of Object.entries(BUILD)) rollup(id,q,new Set(),acc); return acc;}
 // aggregate EVERY component (intermediates + raws) once each, excluding the target items
@@ -449,7 +512,22 @@ function equipStats(){
   for(const id of Object.values(EQUIP)){const it=ITEMS[id]; if(!it)continue;
     if(it.stats) for(const [k,r] of Object.entries(it.stats)) add(it.name,k,r[0],r[1],true);
     if(it.damages) for(const [k,r] of Object.entries(it.damages)) add(it.name,'dmg:'+k,r[0],r[1],true);}
+  for(const sb of setBonusSources(Object.values(EQUIP)))
+    for(const [k,v] of Object.entries(sb.stats)) add(sb.name,k,v,v,true);
   return tot;
+}
+// set bonuses: count equipped pieces per set, take the highest threshold <= count
+function setBonusSources(ids){
+  const cnt={};
+  for(const id of ids){const it=ITEMS[id]; const s=it&&it.set; if(s)cnt[s]=(cnt[s]||0)+1;}
+  const out=[];
+  for(const [name,n] of Object.entries(cnt)){
+    const def=SETS[name]; if(!def||!def.bonuses)continue;
+    const ths=Object.keys(def.bonuses).map(Number).filter(t=>t<=n).sort((a,b)=>a-b);
+    if(!ths.length)continue;
+    out.push({name:name+' ('+n+' pc)', stats:def.bonuses[String(ths[ths.length-1])]});
+  }
+  return out;
 }
 // gear-only stat aggregation for an arbitrary item-id list (craft-list set)
 function statsFromItems(ids){
@@ -459,6 +537,8 @@ function statsFromItems(ids){
   for(const id of ids){const it=ITEMS[id]; if(!it)continue;
     if(it.stats) for(const [k,r] of Object.entries(it.stats)) add(it.name,k,r[0],r[1]);
     if(it.damages) for(const [k,r] of Object.entries(it.damages)) add(it.name,'dmg:'+k,r[0],r[1]);}
+  for(const sb of setBonusSources(ids))
+    for(const [k,v] of Object.entries(sb.stats)) add(sb.name,k,v,v);
   return tot;
 }
 // auto-place the equippable items in the craft list into a slot map (preview loadout)
@@ -489,6 +569,25 @@ function statsBlock(it){
   if(s) for(const [k,r] of Object.entries(s)) rows+=statRow(k,r,'');
   return `<div class="section"><h3>Stats</h3><div class="statgrid">${rows}</div>
     <div class="legend">ranges = the possible roll on this item</div></div>`;}
+// set membership + per-threshold bonuses for an item that belongs to a set
+function setBlock(it){
+  const name=it.set; if(!name) return '';
+  const def=SETS[name];
+  const pieces=arr.filter(x=>x.set===name);
+  let h=`<div class="section"><h3>Set — ${name}</h3>`;
+  if(def&&def.bonuses&&Object.keys(def.bonuses).length){
+    h+=`<div class="setbonus">`+Object.keys(def.bonuses).map(Number).sort((a,b)=>a-b).map(t=>{
+      const st=def.bonuses[String(t)];
+      const stats=Object.entries(st).map(([k,v])=>
+        `<span style="color:${statColor(k)}">+${v} ${statName(k)}</span>`).join('  ');
+      return `<div class="setrow"><b>${t} pc</b>${stats}</div>`;}).join('')+`</div>`;
+  } else { h+=`<div class="src" style="margin-bottom:10px">no bonus data for this set</div>`; }
+  if(pieces.length) h+=`<div class="setpieces">`+pieces.map(p=>
+    `<span class="setpiece${p.id===it.id?' cur':''}" data-setid="${p.id}">${imgFor(p.id,'tico')}${p.name}</span>`).join('')+`</div>`;
+  return h+`</div>`;
+}
+function wireSetPieces(){detail.querySelectorAll('[data-setid]').forEach(e=>
+  e.onclick=()=>showItemSummary(e.dataset.setid));}
 
 const arr=Object.values(ITEMS);
 
@@ -600,6 +699,7 @@ function showItemSummary(id){
         ${it.type?`<span class="lvtag">${it.type.toLowerCase().replace(/_/g,' ')}</span>`:''}</div>
     </div></div>`;
   h+=statsBlock(it);
+  h+=setBlock(it);
   if(!it.stats&&!it.damages) h+=`<div class="sub">${rec?`Crafted by <b>${rec.job.toLowerCase()}</b>`:'Base material'}</div>`;
   if(it.sources&&it.sources.length) h+=`<div class="sub">Gather: ${srcLabel(it)}</div>`;
   h+=`<div class="addrow">
@@ -612,6 +712,7 @@ function showItemSummary(id){
       ${rec?`<button class="addlist" id="recipebtn" style="background:var(--panel2);color:var(--text);border:1px solid var(--line)">View crafting recipe →</button>`:''}
     </div></div>`;
   detail.innerHTML=h;
+  wireSetPieces();
   const eb=document.getElementById('equipbtn'); if(eb)eb.onclick=()=>{if(equipItem(id)){eb.textContent='✓ Equipped'; refreshChar();}};
   const addb=document.getElementById('addlist'); if(addb)addb.onclick=()=>{addToBuild(id,1); showItemSummary(id);};
   detail.querySelectorAll('[data-bd]').forEach(b=>b.onclick=()=>{BUILD[id]=(BUILD[id]||0)+(+b.dataset.bd);
@@ -637,6 +738,7 @@ function showItemFull(id){
       ${BUILD[id]?`<span class="src">already on list: ${BUILD[id]}×</span>`:''}
     </div>`;
   h+=statsBlock(it);
+  h+=setBlock(it);
   if(rec){
     h+=`<div class="section"><h3>Component tree</h3><div class="tree" id="tree"></div>
         <div class="legend">▾ click to expand · qty = amount to make 1 of this item</div></div>`;
@@ -652,6 +754,7 @@ function showItemFull(id){
   }
   detail.innerHTML=h;
   renderTagZone(id);
+  wireSetPieces();
   let aq=1; const aqEl=document.getElementById('addq');
   document.getElementById('aqm').onclick=()=>{aq=Math.max(1,aq-1); aqEl.textContent=aq;};
   document.getElementById('aqp').onclick=()=>{aq++; aqEl.textContent=aq;};
@@ -702,15 +805,34 @@ function renderTagZone(id){
 }
 
 // ---- craft list view (targets + aggregated totals + have/left) ------------
+// up-to-5 named lists shown as switchable tabs above the list
+function listTabsHTML(){
+  const ids=Object.keys(LISTS);
+  let h=`<div class="listtabs">`;
+  for(const id of ids){const L=LISTS[id], n=Object.keys(L.items).length;
+    h+=`<span class="ltab${id===ACTIVE?' on':''}" data-list="${id}" title="click to switch · double-click to rename">
+      ${L.name}<span class="cnt">${n}</span>${id===ACTIVE?`<span class="lx" data-del="${id}" title="delete this list">✕</span>`:''}</span>`;}
+  if(ids.length<MAXLISTS) h+=`<span class="ltab add" data-newlist="1" title="new craft list">+ New list</span>`;
+  return h+`</div>`;
+}
+function wireListTabs(){
+  detail.querySelectorAll('[data-list]').forEach(e=>{
+    e.onclick=ev=>{if(ev.target.dataset.del)return; setActiveList(e.dataset.list);};
+    e.ondblclick=()=>renameList(e.dataset.list);});
+  detail.querySelectorAll('[data-del]').forEach(e=>e.onclick=ev=>{ev.stopPropagation(); deleteList(e.dataset.del);});
+  const nl=detail.querySelector('[data-newlist]'); if(nl)nl.onclick=newList;
+}
 function showList(){
   viewingList=true; sel=null; renderList();
   const ids=Object.keys(BUILD);
-  if(!ids.length){detail.innerHTML=`<div class="empty">Your craft list is empty.<br>
-    Open any item and hit <b>+ Add to craft list</b>.</div>`; return;}
-  let h=`<div class="hd"><h2>My craft list</h2></div>
+  const tabs=listTabsHTML();
+  if(!ids.length){detail.innerHTML=tabs+`<div class="empty">"${LISTS[ACTIVE].name}" is empty.<br>
+    Open any item and hit <b>+ Add to craft list</b>.</div>`; wireListTabs(); return;}
+  let h=tabs+`<div class="hd"><h2>${LISTS[ACTIVE].name}</h2></div>
     <div class="sub">Pick what you want to make; totals and "what's left" update as you check things off.</div>`;
   // targets
-  h+=`<div class="section"><h3>Items to make</h3><table class="roll">`;
+  h+=`<div class="section"><h3>Items to make
+      <button class="rmall" id="rmall">Remove all</button></h3><table class="roll">`;
   for(const id of ids){const it=ITEMS[id]||{name:id};
     h+=`<tr><td class="ic">${imgFor(id,'tico')}</td><td class="mname">${it.name}</td>
       <td><span class="qstep"><button data-bq="${id}" data-d="-1">−</button>
@@ -720,7 +842,8 @@ function showList(){
   // gear-set preview: equippable items in the list, shown in their slots + combined stats
   const loadout=buildLoadout(); const setIds=Object.values(loadout);
   if(setIds.length){
-    h+=`<div class="section"><h3>Gear set preview</h3>
+    h+=`<div class="section"><h3>Gear set preview
+        <button class="rmall equipall" id="equipall">Equip all to character ⮕</button></h3>
       <div class="charwrap"><div class="charleft">
         <div class="slotgrid">${SLOTS.map(s=>slotHTML(s,loadout,true)).join('')}</div>
         <div class="handrow">${slotHTML(HAND,loadout,true)}</div>
@@ -756,6 +879,7 @@ function showList(){
       &nbsp; tick the box (or type how many you have) to cross it off · totals combine every item above</div></div>`;
   detail.innerHTML=h;
   // wiring
+  wireListTabs();
   detail.querySelectorAll('[data-bq]').forEach(b=>b.onclick=()=>{
     const id=b.dataset.bq; BUILD[id]=(BUILD[id]||0)+(+b.dataset.d);
     if(BUILD[id]<=0) delete BUILD[id]; saveBuild(); showList();});
@@ -765,9 +889,14 @@ function showList(){
     HAVE[c.dataset.chk]=c.checked?(+c.dataset.need):0; saveHave(); showList();});
   detail.querySelectorAll('.havein').forEach(inp=>inp.onchange=()=>{
     const v=Math.max(0,parseInt(inp.value)||0); HAVE[inp.dataset.have]=v; saveHave(); showList();});
+  const rmall=document.getElementById('rmall'); if(rmall)rmall.onclick=()=>{
+    if(confirm('Remove all items from "'+LISTS[ACTIVE].name+'"?')){clearActiveList(); showList();}};
   document.getElementById('clearlist').onclick=()=>{
-    if(confirm('Clear the whole craft list?')){BUILD={}; saveBuild(); showList();}};
+    if(confirm('Clear the whole craft list?')){clearActiveList(); showList();}};
   if(setIds.length){
+    const ea=document.getElementById('equipall'); if(ea)ea.onclick=()=>{
+      for(const [k,id] of Object.entries(loadout)) EQUIP[k]=id;
+      saveEquip(); refreshChar(); ea.textContent='✓ Equipped to character';};
     const setTot=statsFromItems(setIds); const box=document.getElementById('setstats');
     box.innerHTML=Object.keys(setTot).length?renderStatRows(setTot):'<div class="src">these items have no stats</div>';
     wireStatHover(box,setTot);
@@ -872,9 +1001,14 @@ function renderStatTotals(){
 let tipEl;
 function showSlotTip(id){const it=ITEMS[id]; if(!it)return;
   if(!tipEl){tipEl=document.createElement('div'); tipEl.className='tip'; document.body.appendChild(tipEl);}
-  let rows=''; if(it.stats) for(const [k,r] of Object.entries(it.stats))
+  let rows='';
+  if(it.damages) for(const [k,r] of Object.entries(it.damages))
+    rows+=`<div><span style="color:#E24B4A">${pretty(k)} dmg</span> +${r[0]===r[1]?r[0]:r[0]+'–'+r[1]}</div>`;
+  if(it.stats) for(const [k,r] of Object.entries(it.stats))
     rows+=`<div><span style="color:${statColor(k)}">${statName(k)}</span> +${r[0]===r[1]?r[0]:r[0]+'–'+r[1]}</div>`;
-  tipEl.innerHTML=`<b>${it.name}</b>${rarPill(it.rarity)}<div class="tiprows">${rows||'<span class="src">no stats</span>'}</div>`;
+  const setln=it.set?`<div class="src" style="margin-top:5px">⛓ ${it.set}</div>`:'';
+  const lvln=it.level?` <span class="src">Lv${it.level}</span>`:'';
+  tipEl.innerHTML=`<b>${it.name}</b>${rarPill(it.rarity)}${lvln}<div class="tiprows">${rows||'<span class="src">no stats</span>'}</div>${setln}`;
   tipEl.style.display='block';}
 function moveTip(e){if(tipEl){tipEl.style.left=Math.min(e.clientX+14,innerWidth-260)+'px'; tipEl.style.top=(e.clientY+14)+'px';}}
 function hideTip(){if(tipEl)tipEl.style.display='none';}
@@ -897,8 +1031,16 @@ function loadUserStats(){
 list.addEventListener('dragstart',e=>{const r=e.target.closest('.row');
   if(r&&r.dataset.id) e.dataTransfer.setData('text/plain',r.dataset.id);});
 list.addEventListener('dblclick',e=>{const r=e.target.closest('.row');
-  if(r&&r.dataset.id&&equipItem(r.dataset.id)){refreshChar();
+  if(r&&r.dataset.id&&equipItem(r.dataset.id)){hideTip(); refreshChar();
     const eb=document.getElementById('equipbtn'); if(eb&&sel===r.dataset.id) eb.textContent='✓ Equipped';}});
+// hover a row -> live stats tooltip (no click needed); double-click still equips
+list.addEventListener('mouseover',e=>{const r=e.target.closest('.row');
+  if(r&&r.dataset.id){const it=ITEMS[r.dataset.id];
+    if(it&&(it.stats||it.damages)){showSlotTip(r.dataset.id); moveTip(e);} else hideTip();}});
+list.addEventListener('mousemove',e=>{if(tipEl&&tipEl.style.display==='block'&&e.target.closest('.row'))moveTip(e);});
+list.addEventListener('mouseout',e=>{const from=e.target.closest('.row');
+  const to=e.relatedTarget&&e.relatedTarget.closest?e.relatedTarget.closest('.row'):null;
+  if(from&&from!==to)hideTip();});
 list.onclick=e=>{
   const r=e.target.closest('.row');
   if(r){ if(r.dataset.tagfilter){tagFilter=tagFilter===r.dataset.tagfilter?null:r.dataset.tagfilter; renderList(); return;}

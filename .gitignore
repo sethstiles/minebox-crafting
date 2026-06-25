@@ -4,3 +4,6 @@ data/
 # Python
 __pycache__/
 *.pyc
+
+# Local preview config
+.claude/
