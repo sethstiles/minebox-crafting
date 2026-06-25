@@ -381,6 +381,19 @@ tr.doneRow .mname{text-decoration:line-through}
 .setpiece:hover{border-color:var(--accent);color:var(--text)}
 .setpiece.cur{border-color:var(--accent);color:var(--text);background:var(--panel2)}
 .setpiece .tico{width:18px;height:18px}
+.optchips{display:flex;flex-wrap:wrap;gap:8px;max-width:780px}
+.optchip{font-size:13px;padding:5px 13px;border-radius:18px;border:1px solid var(--line);
+   background:var(--panel);color:var(--muted);cursor:pointer;user-select:none}
+.optchip:hover{border-color:var(--accent)}
+.optchip.on{font-weight:600}
+.lvlslider{width:100%;max-width:520px;accent-color:var(--accent);cursor:pointer;margin:2px 0}
+.optbuild{border:1px solid var(--line);border-radius:12px;padding:15px 18px;margin-bottom:18px;background:var(--panel)}
+.optbuildhd{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.optbuildhd .rmall{float:none}
+.optrank{font-size:18px;font-weight:700;color:var(--accent2)}
+.optscore{font-size:13px;color:var(--text);background:var(--panel2);border:1px solid var(--line);
+   border-radius:8px;padding:2px 10px;font-variant-numeric:tabular-nums}
+.optequip{margin-left:auto}
 </style></head>
 <body>
 <header>
@@ -388,6 +401,7 @@ tr.doneRow .mname{text-decoration:line-through}
   <div class="search">
     <input id="q" placeholder="Search items, or browse categories on the left..." autocomplete="off">
     <span class="count" id="count"></span>
+    <button class="listbtn" id="optbtn">Optimizer</button>
     <button class="listbtn charbtn-narrow" id="charbtn">Character</button>
     <button class="listbtn" id="listbtn">Craft list <span id="listn">0</span></button>
   </div>
@@ -590,6 +604,13 @@ function wireSetPieces(){detail.querySelectorAll('[data-setid]').forEach(e=>
   e.onclick=()=>showItemSummary(e.dataset.setid));}
 
 const arr=Object.values(ITEMS);
+// every attribute stat that appears on equippable gear or in a set bonus,
+// ordered to match the /attributes ordering (used by the optimizer chips)
+const GEAR_STATS=(()=>{const s=new Set();
+  for(const it of arr){ if(it.type&&it.stats) for(const k in it.stats) s.add(k.toLowerCase()); }
+  for(const def of Object.values(SETS)) for(const th of Object.values(def.bonuses||{})) for(const k in th) s.add(k.toLowerCase());
+  const ord=Object.keys(ATTR);
+  return [...s].sort((a,b)=>((ord.indexOf(a)<0?99:ord.indexOf(a))-(ord.indexOf(b)<0?99:ord.indexOf(b)))||a.localeCompare(b));})();
 
 // ---- left panel: categories or search results -----------------------------
 function renderList(){
@@ -1028,6 +1049,125 @@ function loadUserStats(){
     .catch(err=>{btn.textContent='Not found ('+err+')';});
 }
 
+// ---- gear optimizer -------------------------------------------------------
+// pick stats to maximize + a level cap; search items AND set bonuses for the
+// best loadouts. Candidates: pure best-in-slot greedy, every relevant set
+// anchored at each piece-threshold, and dual (2pc+2pc) set combos; remaining
+// slots filled greedily, then deduped and ranked by weighted score.
+let OPT=JSON.parse(localStorage.getItem('mb_opt')||'null')||{stats:[],level:100,basis:'max'};
+function saveOpt(){localStorage.setItem('mb_opt',JSON.stringify(OPT));}
+function optStatScore(it,weights,useMax){
+  if(!it.stats)return 0; let s=0;
+  for(const [k,r] of Object.entries(it.stats)){const w=weights[k.toLowerCase()]; if(w)s+=(useMax?r[1]:(r[0]+r[1])/2)*w;}
+  return s;
+}
+function optimize(selStats,levelCap,useMax){
+  const weights={}; selStats.forEach(k=>weights[k]=1);
+  const elig=it=>it.type&&(!it.level||it.level<=levelCap);
+  const score=it=>optStatScore(it,weights,useMax);
+  // per-slot eligible items, best score first
+  const bySlot={}; ALLSLOTS.forEach(s=>bySlot[s.k]=[]);
+  for(const it of arr){ if(!elig(it))continue; for(const s of slotForType(it.type)) bySlot[s.k].push(it); }
+  for(const k in bySlot) bySlot[k].sort((a,b)=>score(b)-score(a));
+  function greedyFill(prefer){
+    const eq=Object.assign({},prefer); const used=new Set(Object.values(eq));
+    for(const s of ALLSLOTS){ if(eq[s.k])continue;
+      const c=bySlot[s.k].find(it=>!used.has(it.id)&&score(it)>0);
+      if(c){eq[s.k]=c.id; used.add(c.id);} }
+    return eq;
+  }
+  function loadoutScore(eq){
+    const ids=Object.values(eq); let s=0;
+    for(const id of ids){const it=ITEMS[id]; if(it)s+=score(it);}
+    for(const sb of setBonusSources(ids))for(const [k,v] of Object.entries(sb.stats)){const w=weights[k.toLowerCase()]; if(w)s+=v*w;}
+    return s;
+  }
+  // sets whose bonus touches a selected stat, with their eligible pieces cached
+  const relSets=Object.keys(SETS).filter(nm=>{const b=SETS[nm].bonuses||{};
+    return Object.values(b).some(th=>Object.keys(th).some(k=>weights[k.toLowerCase()]));});
+  const setPieces={};
+  for(const nm of relSets) setPieces[nm]=arr.filter(x=>x.set===nm&&elig(x)&&canEquip(x)).sort((a,b)=>score(b)-score(a));
+  // place up to maxN of a set's top pieces into distinct slots, optionally on top of a base map
+  function placeSet(nm,maxN,base){
+    const prefer=Object.assign({},base||{}); const used=new Set(Object.values(prefer)); let placed=0;
+    for(const p of setPieces[nm]){ if(placed>=maxN)break; if(used.has(p.id))continue;
+      for(const s of slotForType(p.type)){ if(!prefer[s.k]){prefer[s.k]=p.id; used.add(p.id); placed++; break;} } }
+    return {prefer,placed};
+  }
+  const cands=[greedyFill({})];
+  for(const nm of relSets){
+    const ths=Object.keys(SETS[nm].bonuses).map(Number).sort((a,b)=>a-b);
+    for(const n of ths){ const r=placeSet(nm,n); if(r.placed>=2)cands.push(greedyFill(r.prefer)); }
+    const full=placeSet(nm,99); if(full.placed>=2)cands.push(greedyFill(full.prefer));
+  }
+  for(let i=0;i<relSets.length;i++)for(let j=i+1;j<relSets.length;j++){
+    const a=placeSet(relSets[i],2); if(a.placed<2)continue;
+    const ab=placeSet(relSets[j],2,a.prefer); if(ab.placed>=2)cands.push(greedyFill(ab.prefer));
+  }
+  const seen=new Set(); const scored=[];
+  for(const eq of cands){ const key=ALLSLOTS.map(s=>eq[s.k]||'').join('|');
+    if(seen.has(key))continue; seen.add(key); scored.push({eq,score:loadoutScore(eq)}); }
+  scored.sort((a,b)=>b.score-a.score);
+  return scored.slice(0,5);
+}
+function showOptimizer(){
+  sel=null; viewingList=false; renderList();
+  let h=`<div class="hd"><h2>Gear optimizer</h2></div>
+    <div class="sub">Pick the stats to maximize and your level — it searches every item <i>and</i> set bonus for the best
+      combinations. Try combos like Luck + Fishing Fortune, or Strength + Agility.</div>`;
+  h+=`<div class="section"><h3>Stats to maximize</h3><div class="optchips">`+
+    GEAR_STATS.map(k=>{const on=OPT.stats.includes(k); const c=statColor(k);
+      return `<span class="optchip${on?' on':''}" data-stat="${k}" style="${on?`background:${c}22;border-color:${c};color:${c}`:''}">${statName(k)}</span>`;}).join('')+
+    `</div><div class="legend">click to toggle · combine as many as you like</div></div>`;
+  h+=`<div class="section"><h3>Level cap — <b id="lvlval" style="color:var(--accent2)">${OPT.level}</b></h3>
+      <input type="range" id="lvlslider" min="1" max="100" value="${OPT.level}" class="lvlslider">
+      <div class="legend">only gear that requires this level or lower
+        <span class="modetoggle" style="margin-left:10px">
+          <button data-basis="max" class="${OPT.basis==='max'?'on':''}">Best roll</button>
+          <button data-basis="avg" class="${OPT.basis==='avg'?'on':''}">Average roll</button></span></div></div>`;
+  h+=`<div id="optresults"></div>`;
+  detail.innerHTML=h;
+  detail.querySelectorAll('[data-stat]').forEach(e=>e.onclick=()=>{
+    const k=e.dataset.stat, i=OPT.stats.indexOf(k);
+    if(i<0)OPT.stats.push(k); else OPT.stats.splice(i,1); saveOpt(); showOptimizer();});
+  const sl=document.getElementById('lvlslider');
+  sl.oninput=()=>{document.getElementById('lvlval').textContent=sl.value;};
+  sl.onchange=()=>{OPT.level=+sl.value; saveOpt(); renderOptResults();};
+  detail.querySelectorAll('[data-basis]').forEach(b=>b.onclick=()=>{OPT.basis=b.dataset.basis; saveOpt(); showOptimizer();});
+  renderOptResults();
+}
+function renderOptResults(){
+  const box=document.getElementById('optresults'); if(!box)return;
+  if(!OPT.stats.length){box.innerHTML=`<div class="empty" style="margin-top:30px">Pick one or more stats above to see the best gear combinations.</div>`; return;}
+  const results=optimize(OPT.stats,OPT.level,OPT.basis==='max');
+  if(!results.length||results[0].score<=0){box.innerHTML=`<div class="empty" style="margin-top:30px">No gear with those stats at level ${OPT.level} or lower.</div>`; return;}
+  let h='';
+  results.forEach((r,idx)=>{
+    const sb=setBonusSources(Object.values(r.eq));
+    const setLbl=sb.length?sb.map(s=>s.name).join('  ·  '):'no set bonus';
+    h+=`<div class="optbuild"><div class="optbuildhd">
+        <span class="optrank">#${idx+1}</span>
+        <span class="optscore">${fmt(Math.round(r.score*10)/10)} pts</span>
+        <span class="src">${setLbl}</span>
+        <button class="rmall equipall optequip" data-eq="${idx}">Equip all ⮕</button>
+        <button class="rmall optcraft" data-eq="${idx}">+ Craft list</button></div>
+      <div class="charwrap"><div class="charleft">
+        <div class="slotgrid">${SLOTS.map(s=>slotHTML(s,r.eq,true)).join('')}</div>
+        <div class="handrow">${slotHTML(HAND,r.eq,true)}</div>
+      </div><div class="charright"><h3>Combined stats</h3><div id="optstats${idx}"></div></div></div></div>`;
+  });
+  box.innerHTML=h;
+  results.forEach((r,idx)=>{
+    const tot=statsFromItems(Object.values(r.eq)); const sbox=document.getElementById('optstats'+idx);
+    sbox.innerHTML=renderStatRows(tot); wireStatHover(sbox,tot);});
+  box.querySelectorAll('.slot.filled').forEach(el=>{el.onmouseenter=()=>showSlotTip(el.dataset.itemid);
+    el.onmousemove=moveTip; el.onmouseleave=hideTip;});
+  box.querySelectorAll('.optequip').forEach(b=>b.onclick=()=>{const r=results[+b.dataset.eq];
+    for(const [k,id] of Object.entries(r.eq)) EQUIP[k]=id; saveEquip(); refreshChar(); b.textContent='✓ Equipped';});
+  box.querySelectorAll('.optcraft').forEach(b=>b.onclick=()=>{const r=results[+b.dataset.eq];
+    for(const id of Object.values(r.eq)) addToBuild(id,1); b.textContent='✓ Added to list';});
+}
+
 list.addEventListener('dragstart',e=>{const r=e.target.closest('.row');
   if(r&&r.dataset.id) e.dataTransfer.setData('text/plain',r.dataset.id);});
 list.addEventListener('dblclick',e=>{const r=e.target.closest('.row');
@@ -1048,6 +1188,7 @@ list.onclick=e=>{
   const c=e.target.closest('.cathd');
   if(c){const k=c.dataset.cat; openCats.has(k)?openCats.delete(k):openCats.add(k); renderList();}
 };
+document.getElementById('optbtn').onclick=showOptimizer;
 document.getElementById('charbtn').onclick=showChar;
 document.getElementById('listbtn').onclick=showList;
 q.oninput=()=>{tagFilter=null; renderList();};
