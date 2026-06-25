@@ -386,6 +386,9 @@ tr.doneRow .mname{text-decoration:line-through}
    background:var(--panel);color:var(--muted);cursor:pointer;user-select:none}
 .optchip:hover{border-color:var(--accent)}
 .optchip.on{font-weight:600}
+.optchip .optw{margin-left:7px;font-size:11px;opacity:.9;font-variant-numeric:tabular-nums}
+.optcheck{display:inline-flex;align-items:center;gap:7px;cursor:pointer;color:var(--text)}
+.optcheck input{width:15px;height:15px;cursor:pointer;accent-color:var(--accent)}
 .lvlslider{width:100%;max-width:520px;accent-color:var(--accent);cursor:pointer;margin:2px 0}
 .optbuild{border:1px solid var(--line);border-radius:12px;padding:15px 18px;margin-bottom:18px;background:var(--panel)}
 .optbuildhd{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
@@ -1054,24 +1057,29 @@ function loadUserStats(){
 // best loadouts. Candidates: pure best-in-slot greedy, every relevant set
 // anchored at each piece-threshold, and dual (2pc+2pc) set combos; remaining
 // slots filled greedily, then deduped and ranked by weighted score.
-let OPT=JSON.parse(localStorage.getItem('mb_opt')||'null')||{stats:[],level:100,basis:'max'};
+let OPT=JSON.parse(localStorage.getItem('mb_opt')||'null')||{weights:{},level:100,basis:'max',weapons:true};
+if(OPT.stats&&!OPT.weights){OPT.weights={}; OPT.stats.forEach(k=>OPT.weights[k]=1); delete OPT.stats;}  // migrate old shape
+if(!OPT.weights)OPT.weights={};
+if(OPT.weapons===undefined)OPT.weapons=true;
+const OPT_MAXW=5;
 function saveOpt(){localStorage.setItem('mb_opt',JSON.stringify(OPT));}
 function optStatScore(it,weights,useMax){
   if(!it.stats)return 0; let s=0;
   for(const [k,r] of Object.entries(it.stats)){const w=weights[k.toLowerCase()]; if(w)s+=(useMax?r[1]:(r[0]+r[1])/2)*w;}
   return s;
 }
-function optimize(selStats,levelCap,useMax){
-  const weights={}; selStats.forEach(k=>weights[k]=1);
+function optimize(weights,levelCap,useMax,includeHand){
+  const SL=includeHand?ALLSLOTS:SLOTS;                 // candidate slots (hand optional)
+  const slotsFor=t=>slotForType(t).filter(s=>SL.includes(s));
   const elig=it=>it.type&&(!it.level||it.level<=levelCap);
   const score=it=>optStatScore(it,weights,useMax);
   // per-slot eligible items, best score first
-  const bySlot={}; ALLSLOTS.forEach(s=>bySlot[s.k]=[]);
-  for(const it of arr){ if(!elig(it))continue; for(const s of slotForType(it.type)) bySlot[s.k].push(it); }
+  const bySlot={}; SL.forEach(s=>bySlot[s.k]=[]);
+  for(const it of arr){ if(!elig(it))continue; for(const s of slotsFor(it.type)) bySlot[s.k].push(it); }
   for(const k in bySlot) bySlot[k].sort((a,b)=>score(b)-score(a));
   function greedyFill(prefer){
     const eq=Object.assign({},prefer); const used=new Set(Object.values(eq));
-    for(const s of ALLSLOTS){ if(eq[s.k])continue;
+    for(const s of SL){ if(eq[s.k])continue;
       const c=bySlot[s.k].find(it=>!used.has(it.id)&&score(it)>0);
       if(c){eq[s.k]=c.id; used.add(c.id);} }
     return eq;
@@ -1086,12 +1094,12 @@ function optimize(selStats,levelCap,useMax){
   const relSets=Object.keys(SETS).filter(nm=>{const b=SETS[nm].bonuses||{};
     return Object.values(b).some(th=>Object.keys(th).some(k=>weights[k.toLowerCase()]));});
   const setPieces={};
-  for(const nm of relSets) setPieces[nm]=arr.filter(x=>x.set===nm&&elig(x)&&canEquip(x)).sort((a,b)=>score(b)-score(a));
+  for(const nm of relSets) setPieces[nm]=arr.filter(x=>x.set===nm&&elig(x)&&canEquip(x)&&slotsFor(x.type).length).sort((a,b)=>score(b)-score(a));
   // place up to maxN of a set's top pieces into distinct slots, optionally on top of a base map
   function placeSet(nm,maxN,base){
     const prefer=Object.assign({},base||{}); const used=new Set(Object.values(prefer)); let placed=0;
     for(const p of setPieces[nm]){ if(placed>=maxN)break; if(used.has(p.id))continue;
-      for(const s of slotForType(p.type)){ if(!prefer[s.k]){prefer[s.k]=p.id; used.add(p.id); placed++; break;} } }
+      for(const s of slotsFor(p.type)){ if(!prefer[s.k]){prefer[s.k]=p.id; used.add(p.id); placed++; break;} } }
     return {prefer,placed};
   }
   const cands=[greedyFill({})];
@@ -1105,7 +1113,7 @@ function optimize(selStats,levelCap,useMax){
     const ab=placeSet(relSets[j],2,a.prefer); if(ab.placed>=2)cands.push(greedyFill(ab.prefer));
   }
   const seen=new Set(); const scored=[];
-  for(const eq of cands){ const key=ALLSLOTS.map(s=>eq[s.k]||'').join('|');
+  for(const eq of cands){ const key=SL.map(s=>eq[s.k]||'').join('|');
     if(seen.has(key))continue; seen.add(key); scored.push({eq,score:loadoutScore(eq)}); }
   scored.sort((a,b)=>b.score-a.score);
   return scored.slice(0,5);
@@ -1116,30 +1124,35 @@ function showOptimizer(){
     <div class="sub">Pick the stats to maximize and your level — it searches every item <i>and</i> set bonus for the best
       combinations. Try combos like Luck + Fishing Fortune, or Strength + Agility.</div>`;
   h+=`<div class="section"><h3>Stats to maximize</h3><div class="optchips">`+
-    GEAR_STATS.map(k=>{const on=OPT.stats.includes(k); const c=statColor(k);
-      return `<span class="optchip${on?' on':''}" data-stat="${k}" style="${on?`background:${c}22;border-color:${c};color:${c}`:''}">${statName(k)}</span>`;}).join('')+
-    `</div><div class="legend">click to toggle · combine as many as you like</div></div>`;
+    GEAR_STATS.map(k=>{const w=OPT.weights[k]||0; const c=statColor(k);
+      return `<span class="optchip${w?' on':''}" data-stat="${k}" style="${w?`background:${c}22;border-color:${c};color:${c}`:''}">${statName(k)}${w?`<b class="optw">×${w}</b>`:''}</span>`;}).join('')+
+    `</div><div class="legend">Click a stat to add it (×1); click again to raise its <b>weight</b> (×2 … ×${OPT_MAXW}); once more removes it.<br>
+       <b>Score = Σ (stat total × its weight)</b>, set bonuses included. Weight multiplies how much each <i>point</i> of a stat counts toward the ranking — a ×2 stat is worth twice as much per point as a ×1 stat. Some stats roll far larger numbers than others (Agility in the thousands vs Fortune in the hundreds), so a smaller stat needs a higher weight to compete — Fortune usually deserves more weight than its raw number suggests.</div></div>`;
   h+=`<div class="section"><h3>Level cap — <b id="lvlval" style="color:var(--accent2)">${OPT.level}</b></h3>
       <input type="range" id="lvlslider" min="1" max="100" value="${OPT.level}" class="lvlslider">
-      <div class="legend">only gear that requires this level or lower
-        <span class="modetoggle" style="margin-left:10px">
+      <div class="legend" style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;margin-top:8px">
+        <span>only gear requiring this level or lower</span>
+        <label class="optcheck"><input type="checkbox" id="optweapons" ${OPT.weapons?'checked':''}>Include hand slot (weapons / tools)</label>
+        <span class="modetoggle">
           <button data-basis="max" class="${OPT.basis==='max'?'on':''}">Best roll</button>
           <button data-basis="avg" class="${OPT.basis==='avg'?'on':''}">Average roll</button></span></div></div>`;
   h+=`<div id="optresults"></div>`;
   detail.innerHTML=h;
   detail.querySelectorAll('[data-stat]').forEach(e=>e.onclick=()=>{
-    const k=e.dataset.stat, i=OPT.stats.indexOf(k);
-    if(i<0)OPT.stats.push(k); else OPT.stats.splice(i,1); saveOpt(); showOptimizer();});
+    const k=e.dataset.stat, w=OPT.weights[k]||0;
+    if(w>=OPT_MAXW) delete OPT.weights[k]; else OPT.weights[k]=w+1;
+    saveOpt(); showOptimizer();});
   const sl=document.getElementById('lvlslider');
   sl.oninput=()=>{document.getElementById('lvlval').textContent=sl.value;};
   sl.onchange=()=>{OPT.level=+sl.value; saveOpt(); renderOptResults();};
+  document.getElementById('optweapons').onchange=e=>{OPT.weapons=e.target.checked; saveOpt(); renderOptResults();};
   detail.querySelectorAll('[data-basis]').forEach(b=>b.onclick=()=>{OPT.basis=b.dataset.basis; saveOpt(); showOptimizer();});
   renderOptResults();
 }
 function renderOptResults(){
   const box=document.getElementById('optresults'); if(!box)return;
-  if(!OPT.stats.length){box.innerHTML=`<div class="empty" style="margin-top:30px">Pick one or more stats above to see the best gear combinations.</div>`; return;}
-  const results=optimize(OPT.stats,OPT.level,OPT.basis==='max');
+  if(!Object.keys(OPT.weights).length){box.innerHTML=`<div class="empty" style="margin-top:30px">Pick one or more stats above to see the best gear combinations.</div>`; return;}
+  const results=optimize(OPT.weights,OPT.level,OPT.basis==='max',OPT.weapons);
   if(!results.length||results[0].score<=0){box.innerHTML=`<div class="empty" style="margin-top:30px">No gear with those stats at level ${OPT.level} or lower.</div>`; return;}
   let h='';
   results.forEach((r,idx)=>{
@@ -1153,7 +1166,7 @@ function renderOptResults(){
         <button class="rmall optcraft" data-eq="${idx}">+ Craft list</button></div>
       <div class="charwrap"><div class="charleft">
         <div class="slotgrid">${SLOTS.map(s=>slotHTML(s,r.eq,true)).join('')}</div>
-        <div class="handrow">${slotHTML(HAND,r.eq,true)}</div>
+        ${OPT.weapons?`<div class="handrow">${slotHTML(HAND,r.eq,true)}</div>`:''}
       </div><div class="charright"><h3>Combined stats</h3><div id="optstats${idx}"></div></div></div></div>`;
   });
   box.innerHTML=h;
