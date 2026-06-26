@@ -368,6 +368,7 @@ tr.doneRow .mname{text-decoration:line-through}
 .ltab .cnt{font-size:11px;color:#04221a;background:var(--accent2);border-radius:8px;padding:0 6px;font-weight:600}
 .ltab.on .cnt{color:#04221a}
 .ltab .lx{opacity:.45;font-size:11px}.ltab .lx:hover{opacity:1;color:#E24B4A}
+.ltab .lx.ren:hover{color:var(--accent2)}
 .ltab.add{border-style:dashed}
 .rmall{float:right;font-size:11px;padding:2px 11px;border-radius:8px;border:1px solid var(--line);
    background:none;color:var(--muted);cursor:pointer;text-transform:none;letter-spacing:0;font-weight:500}
@@ -463,6 +464,16 @@ function setActiveList(id){if(!LISTS[id])return; ACTIVE=id; BUILD=LISTS[id].item
 function newList(){const ids=Object.keys(LISTS); if(ids.length>=MAXLISTS)return;
   let i=1; while(LISTS['l'+i])i++; const id='l'+i;
   LISTS[id]={name:'List '+(ids.length+1),items:{},have:{}}; setActiveList(id);}
+// create a named list pre-filled with item ids (each +1) and make it active,
+// WITHOUT navigating away. Returns the new id, or null if at the 5-list cap.
+function createList(name,ids){
+  if(Object.keys(LISTS).length>=MAXLISTS) return null;
+  let i=1; while(LISTS['l'+i])i++; const id='l'+i;
+  const items={}; for(const x of (ids||[])) if(x) items[x]=(items[x]||0)+1;
+  LISTS[id]={name:(name||'New list').slice(0,28),items,have:{}};
+  ACTIVE=id; BUILD=LISTS[id].items; HAVE=LISTS[id].have; saveLists(); updateListN();
+  return id;
+}
 function renameList(id){const cur=LISTS[id]; if(!cur)return;
   const nm=prompt('Rename list:',cur.name); if(nm&&nm.trim()){cur.name=nm.trim().slice(0,28); saveLists(); showList();}}
 function deleteList(id){
@@ -834,15 +845,18 @@ function listTabsHTML(){
   const ids=Object.keys(LISTS);
   let h=`<div class="listtabs">`;
   for(const id of ids){const L=LISTS[id], n=Object.keys(L.items).length;
-    h+=`<span class="ltab${id===ACTIVE?' on':''}" data-list="${id}" title="click to switch · double-click to rename">
-      ${L.name}<span class="cnt">${n}</span>${id===ACTIVE?`<span class="lx" data-del="${id}" title="delete this list">✕</span>`:''}</span>`;}
+    h+=`<span class="ltab${id===ACTIVE?' on':''}" data-list="${id}" title="click to switch">
+      ${L.name}<span class="cnt">${n}</span>${id===ACTIVE?
+        `<span class="lx ren" data-ren="${id}" title="rename this list">✎</span>
+         <span class="lx" data-del="${id}" title="delete this list">✕</span>`:''}</span>`;}
   if(ids.length<MAXLISTS) h+=`<span class="ltab add" data-newlist="1" title="new craft list">+ New list</span>`;
   return h+`</div>`;
 }
 function wireListTabs(){
   detail.querySelectorAll('[data-list]').forEach(e=>{
-    e.onclick=ev=>{if(ev.target.dataset.del)return; setActiveList(e.dataset.list);};
+    e.onclick=ev=>{if(ev.target.dataset.del||ev.target.dataset.ren)return; setActiveList(e.dataset.list);};
     e.ondblclick=()=>renameList(e.dataset.list);});
+  detail.querySelectorAll('[data-ren]').forEach(e=>e.onclick=ev=>{ev.stopPropagation(); renameList(e.dataset.ren);});
   detail.querySelectorAll('[data-del]').forEach(e=>e.onclick=ev=>{ev.stopPropagation(); deleteList(e.dataset.del);});
   const nl=detail.querySelector('[data-newlist]'); if(nl)nl.onclick=newList;
 }
@@ -1178,7 +1192,11 @@ function renderOptResults(){
   box.querySelectorAll('.optequip').forEach(b=>b.onclick=()=>{const r=results[+b.dataset.eq];
     for(const [k,id] of Object.entries(r.eq)) EQUIP[k]=id; saveEquip(); refreshChar(); b.textContent='✓ Equipped';});
   box.querySelectorAll('.optcraft').forEach(b=>b.onclick=()=>{const r=results[+b.dataset.eq];
-    for(const id of Object.values(r.eq)) addToBuild(id,1); b.textContent='✓ Added to list';});
+    const base=Object.keys(OPT.weights).map(statName).join(' + ')||'Optimized';
+    const nm=(base+' #'+(+b.dataset.eq+1));
+    const id=createList(nm,Object.values(r.eq));
+    if(!id){b.textContent='✕ At '+MAXLISTS+'-list limit'; return;}
+    b.textContent='✓ New list: '+LISTS[id].name;});
 }
 
 list.addEventListener('dragstart',e=>{const r=e.target.closest('.row');
