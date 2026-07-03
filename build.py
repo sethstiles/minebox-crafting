@@ -301,6 +301,13 @@ table.roll{border-collapse:collapse;width:100%;max-width:680px}
 .modetoggle button{font-size:11px;padding:2px 10px;border-radius:8px;border:1px solid var(--line);
    background:none;color:var(--muted);cursor:pointer;text-transform:none;letter-spacing:0}
 .modetoggle button.on{background:var(--accent);color:#04221a;border-color:var(--accent);font-weight:600}
+.focustoggle{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:2px 0 12px;
+   font-size:12px;color:var(--muted)}
+.focustoggle button{font-size:11px;padding:2px 10px;border-radius:8px;border:1px solid var(--line);
+   background:none;color:var(--muted);cursor:pointer;text-transform:none;letter-spacing:0;max-width:230px;
+   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.focustoggle button:hover{border-color:var(--accent)}
+.focustoggle button.on{background:var(--accent);color:#04221a;border-color:var(--accent);font-weight:600}
 .havein{width:58px;padding:4px 6px;border-radius:6px;border:1px solid var(--line);
    background:var(--bg);color:var(--text);font-size:13px;text-align:right}
 .havechk{width:16px;height:16px;cursor:pointer;accent-color:var(--accent)}
@@ -450,7 +457,7 @@ if(!LISTS){   // migrate the old single mb_build/mb_have into list 1
 }
 if(!LISTS[ACTIVE]) ACTIVE=Object.keys(LISTS)[0];
 let BUILD=LISTS[ACTIVE].items, HAVE=LISTS[ACTIVE].have;
-let listMode='raw', viewingList=false;
+let listMode='raw', viewingList=false, listFocus=null;  // listFocus=item id => totals for that one target only
 function saveLists(){localStorage.setItem('mb_lists',JSON.stringify(LISTS));
   localStorage.setItem('mb_active',ACTIVE);}
 function saveBuild(){saveLists(); updateListN();}
@@ -483,7 +490,7 @@ function deleteList(id){
   BUILD=LISTS[ACTIVE].items; HAVE=LISTS[ACTIVE].have; saveLists(); updateListN(); showList();}
 saveLists();   // persist the migrated/normalized shape on first load
 // aggregate raw materials (leaves) across the whole craft list
-function rawAgg(){const acc={}; for(const [id,q] of Object.entries(BUILD)) rollup(id,q,new Set(),acc); return acc;}
+function rawAgg(only){const acc={}; for(const [id,q] of Object.entries(BUILD)){if(only&&id!==only)continue; rollup(id,q,new Set(),acc);} return acc;}
 // aggregate EVERY component (intermediates + raws) once each, excluding the target items
 function walkBom(id,mult,stack,acc,isTop){
   if(!isTop) acc[id]=(acc[id]||0)+mult;
@@ -491,7 +498,7 @@ function walkBom(id,mult,stack,acc,isTop){
   if(!rec||stack.has(id)) return;
   const ns=new Set(stack); ns.add(id); const per=rec.amount||1;
   for(const ing of rec.ingredients) walkBom(ing.id,mult*ing.amount/per,ns,acc,false);}
-function bomAgg(){const acc={}; for(const [id,q] of Object.entries(BUILD)) walkBom(id,q,new Set(),acc,true); return acc;}
+function bomAgg(only){const acc={}; for(const [id,q] of Object.entries(BUILD)){if(only&&id!==only)continue; walkBom(id,q,new Set(),acc,true);} return acc;}
 
 // ---- character / equipment loadout ----------------------------------------
 let EQUIP = JSON.parse(localStorage.getItem('mb_equip')||'{}');   // {slotKey:itemId}
@@ -776,8 +783,8 @@ function showItemFull(id){
   h+=setBlock(it);
   if(rec){
     h+=`<div class="section"><h3>Component tree</h3><div class="tree" id="tree"></div>
-        <div class="legend">▾ click to expand · qty = amount to make 1 of this item</div></div>`;
-    h+=`<div class="section"><h3>Total raw materials</h3><table class="roll" id="roll"></table></div>`;
+        <div class="legend" id="treelegend">▾ click to expand · qty = amount to make 1 of this item</div></div>`;
+    h+=`<div class="section"><h3 id="rollhd">Total raw materials</h3><table class="roll" id="roll"></table></div>`;
   }
   if(it.sources&&it.sources.length){
     h+=`<div class="section"><h3>Where to gather</h3><table class="roll">
@@ -791,15 +798,14 @@ function showItemFull(id){
   renderTagZone(id);
   wireSetPieces();
   let aq=1; const aqEl=document.getElementById('addq');
-  document.getElementById('aqm').onclick=()=>{aq=Math.max(1,aq-1); aqEl.textContent=aq;};
-  document.getElementById('aqp').onclick=()=>{aq++; aqEl.textContent=aq;};
-  document.getElementById('addlist').onclick=()=>{addToBuild(id,aq);
-    const b=document.getElementById('addlist'); b.textContent=`✓ Added — ${BUILD[id]}× on list`;};
-  const eb=document.getElementById('equipbtn');
-  if(eb) eb.onclick=()=>{if(equipItem(id)){eb.textContent='✓ Equipped'; refreshChar();}};
-  if(rec){
-    document.getElementById('tree').appendChild(buildNode(id,1,new Set()));
-    const acc=rollup(id,1,new Set(),{});
+  function renderRecipe(){                       // re-draw tree + raw totals scaled by aq
+    if(!rec)return;
+    const tree=document.getElementById('tree');
+    tree.innerHTML=''; tree.appendChild(buildNode(id,aq,new Set()));
+    const lg=document.getElementById('treelegend');
+    if(lg)lg.textContent=`▾ click to expand · qty = amount to make ${aq>1?aq+'× ':'1 of '}this item`;
+    const hd=document.getElementById('rollhd'); if(hd)hd.textContent=aq>1?`Total raw materials (×${aq})`:'Total raw materials';
+    const acc=rollup(id,aq,new Set(),{});
     const rows=Object.entries(acc).sort((a,b)=>b[1]-a[1]).map(([rid,amt])=>{
       const ri=ITEMS[rid]||{name:rid,sources:[]};
       return `<tr><td class="ic">${imgFor(rid,'tico')}</td><td>${ri.name}</td>
@@ -808,6 +814,14 @@ function showItemFull(id){
     document.getElementById('roll').innerHTML=
       `<tr><th></th><th>Raw material</th><th>Best source</th><th>Qty</th></tr>`+rows.join('');
   }
+  function setQ(v){aq=Math.max(1,v); aqEl.textContent=aq; renderRecipe();}
+  document.getElementById('aqm').onclick=()=>setQ(aq-1);
+  document.getElementById('aqp').onclick=()=>setQ(aq+1);
+  document.getElementById('addlist').onclick=()=>{addToBuild(id,aq);
+    const b=document.getElementById('addlist'); b.textContent=`✓ Added — ${BUILD[id]}× on list`;};
+  const eb=document.getElementById('equipbtn');
+  if(eb) eb.onclick=()=>{if(equipItem(id)){eb.textContent='✓ Equipped'; refreshChar();}};
+  renderRecipe();
 }
 
 // ---- tag zone (assign / create custom tags) -------------------------------
@@ -888,16 +902,21 @@ function showList(){
         <div class="legend">equippable items in your craft list, in their slots · hover for stats</div>
       </div><div class="charright"><h3>Combined gear stats</h3><div id="setstats"></div></div></div></div>`;
   }
-  // totals
-  const acc = listMode==='raw' ? rawAgg() : bomAgg();
+  // totals — optionally scoped to a single target ("target one item at a time")
+  if(listFocus && !BUILD[listFocus]) listFocus=null;  // drop stale focus
+  const acc = listMode==='raw' ? rawAgg(listFocus) : bomAgg(listFocus);
   const rows=Object.entries(acc).map(([rid,amt])=>[rid,Math.ceil(Math.round(amt*100)/100)])
     .sort((a,b)=>b[1]-a[1]);
   const done=rows.filter(([rid,need])=>(HAVE[rid]||0)>=need).length;
   const pct=rows.length?Math.round(done/rows.length*100):0;
-  h+=`<div class="section"><h3>Totals — ${done}/${rows.length} complete
+  const focusName=listFocus?(ITEMS[listFocus]||{name:listFocus}).name:null;
+  h+=`<div class="section"><h3>Totals — ${done}/${rows.length} complete${focusName?` · <span style="color:var(--accent)">${focusName}</span>`:''}
       <span class="modetoggle">
         <button data-mode="raw" class="${listMode==='raw'?'on':''}">Raw materials</button>
         <button data-mode="all" class="${listMode==='all'?'on':''}">All components</button></span></h3>
+    <div class="focustoggle">Target:
+      <button data-focus="" class="${!listFocus?'on':''}">All items</button>
+      ${ids.map(fid=>`<button data-focus="${fid}" class="${listFocus===fid?'on':''}">${BUILD[fid]}× ${(ITEMS[fid]||{name:fid}).name}</button>`).join('')}</div>
     <div class="progress"><span style="width:${pct}%"></span></div>
     <table class="roll"><tr><th></th><th></th><th>Material</th><th>Best source</th>
       <th>Need</th><th>Have</th><th>Left</th></tr>`;
@@ -914,7 +933,7 @@ function showList(){
       <td class="n left ${left?'':'zero'}">${left}</td></tr>`;}
   h+=`</table>
     <div class="legend" style="margin-top:12px"><button id="clearlist">Clear list</button>
-      &nbsp; tick the box (or type how many you have) to cross it off · totals combine every item above</div></div>`;
+      &nbsp; tick the box (or type how many you have) to cross it off · ${listFocus?`totals for <b>${focusName}</b> only`:'totals combine every item above'}</div></div>`;
   detail.innerHTML=h;
   // wiring
   wireListTabs();
@@ -923,6 +942,7 @@ function showList(){
     if(BUILD[id]<=0) delete BUILD[id]; saveBuild(); showList();});
   detail.querySelectorAll('[data-rm]').forEach(e=>e.onclick=()=>{delete BUILD[e.dataset.rm]; saveBuild(); showList();});
   detail.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{listMode=b.dataset.mode; showList();});
+  detail.querySelectorAll('[data-focus]').forEach(b=>b.onclick=()=>{listFocus=b.dataset.focus||null; showList();});
   detail.querySelectorAll('.havechk').forEach(c=>c.onchange=()=>{
     HAVE[c.dataset.chk]=c.checked?(+c.dataset.need):0; saveHave(); showList();});
   detail.querySelectorAll('.havein').forEach(inp=>inp.onchange=()=>{
