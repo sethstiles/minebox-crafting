@@ -47,6 +47,8 @@ def main():
     try_save("harvestables.json", "/harvestables"); print("harvestables")
     try_save("collections.json", "/collections"); print("collections")
     try_save("sets.json", "/sets"); print("sets")
+    try_save("attributes.json", "/attributes"); print("attributes")
+    try_save("relics.json", "/relics"); print("relics")
 
     page, n = 1, 0
     while True:
